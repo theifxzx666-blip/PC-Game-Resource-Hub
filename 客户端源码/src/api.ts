@@ -12,6 +12,7 @@ import type {
   ModEntry,
   ModProfile,
   PlanItem,
+  ResourceKind,
   SearchQuery,
   SearchResult,
   SearchSource,
@@ -48,6 +49,7 @@ export interface UpdateItem {
 
 /** 存档路径候选来源 */
 export type SavePathOrigin =
+  | 'library'
   | 'known-rule'
   | 'game-name-dir'
   | 'appdata'
@@ -65,6 +67,39 @@ export interface SavePathCandidate {
   sizeBytes: number
   lastModified: string
   reason: string
+  /** 知识库标注的路径用途标签（config / save 等） */
+  tags?: string[]
+}
+
+/** 存档路径知识库元信息 */
+export interface SavePathLibraryInfo {
+  available: boolean
+  source: string
+  generatedAt: string
+  games: number
+  paths: number
+  withSteam: number
+}
+
+/**
+ * 修改器 / MOD 元数据知识库概况。
+ * 内置离线快照，只含元数据，不含下载直链。
+ */
+export interface TrainerLibraryInfo {
+  available: boolean
+  total: number
+  generatedAt: string
+  source: string
+  notice: string
+  byKind: Record<string, number>
+}
+
+/** 知识库里的单条记录：CatalogResource + 封面 / 网盘来源分类（无链接）。 */
+export interface TrainerRecord extends CatalogResource {
+  cover?: string
+  linkKinds?: string[]
+  linkCount?: number
+  postedAt?: string
 }
 
 export interface SaveProbeResult {
@@ -72,6 +107,13 @@ export interface SaveProbeResult {
   candidates: SavePathCandidate[]
   scannedRoots: string[]
   skipped: string[]
+  /** 本次探测的知识库命中情况 */
+  library: {
+    available: boolean
+    matched: string
+    matchBy: 'steam' | 'name' | ''
+    pathCount: number
+  }
 }
 
 export interface SaveSnapshotResult {
@@ -133,6 +175,7 @@ export interface AppApi {
     export: (gameId: string, backupId: string) => Promise<IpcResult<string>>
     import: (file: string) => Promise<IpcResult<BackupEntry[]>>
     probePaths: (gameId: string) => Promise<IpcResult<SaveProbeResult>>
+    libraryInfo: () => Promise<IpcResult<SavePathLibraryInfo>>
     snapshotTake: (gameId: string, dirs?: string[]) => Promise<IpcResult<SaveSnapshotResult>>
     snapshotDiff: (gameId: string, dirs?: string[]) => Promise<IpcResult<SaveDiffResult>>
   }
@@ -168,6 +211,15 @@ export interface AppApi {
     clearCache: () => Promise<IpcResult<boolean>>
     cacheMeta: () => Promise<IpcResult<{ capturedAt: string; count: number }>>
     enqueueDownload: (resource: CatalogResource) => Promise<IpcResult<DownloadTask>>
+  }
+  /**
+   * 修改器 / MOD 元数据知识库（内置离线快照，只读元数据）。
+   * 无下载直链，homepage 指向来源帖。
+   */
+  trainers: {
+    info: () => Promise<IpcResult<TrainerLibraryInfo>>
+    forGame: (gameName: string, aliases?: string[]) => Promise<IpcResult<TrainerRecord[]>>
+    search: (keyword: string, kinds?: ResourceKind[], limit?: number) => Promise<IpcResult<TrainerRecord[]>>
   }
   library: {
     list: () => Promise<IpcResult<LibraryItem[]>>

@@ -26,7 +26,13 @@
  */
 import { store } from './store.js'
 import { offlineCatalog } from './offlineCatalog.js'
-import { nowText, uid } from './util.js'
+import {
+  allTrainers,
+  searchTrainers,
+  trainersAvailable,
+  trainersForGame,
+} from './trainerLibrary.js'
+import { nowText, uid, normKey } from './util.js'
 import type {
   CatalogResource,
   OnlineResource,
@@ -59,10 +65,14 @@ const KEYWORD_TOKEN = '{keyword}'
 /** 测试连通性时用于替换 {keyword} 的探测词，仅验证可达性与解析，不代表真实检索结果。 */
 const PROBE_KEYWORD = 'game'
 
-/** 归一化文本，用于去重与关键词匹配。 */
-function norm(input: string): string {
-  return input.toLowerCase().replace(/[\s_\-.:：、，,()（）[\]【】]/g, '')
-}
+/**
+ * 归一化文本，用于去重与关键词匹配。
+ *
+ * 不在此处自行实现：统一走 util.ts 的 normKey（主进程唯一真源）。
+ * 原实现只剥 9 个标点，与存档路径库、游戏名比对的清洗口径不一致，
+ * 会导致「同一资源在两个模块里算出两个键」——参考项目已踩过这个坑。
+ */
+const norm = normKey
 
 function str(value: unknown, fallback = ''): string {
   if (value === null || value === undefined) return fallback
@@ -599,6 +609,48 @@ function offlineAsOnline(): OnlineResource[] {
   }))
 }
 
+/**
+ * 内置修改器 / MOD 元数据知识库 → OnlineResource。
+ *
+ * 与 offlineCatalog 的区别：offlineCatalog 是 5 条演示数据，
+ * 这是 8943 条真实元数据（机地社区帖离线快照）。
+ * 只走元数据：downloadUrl 恒空，homepage 指向来源帖。
+ */
+function trainersAsOnline(limit = 400): OnlineResource[] {
+  if (!trainersAvailable()) return []
+  return allTrainers()
+    .slice(0, limit)
+    .map((record) => ({
+      ...record,
+      sourceIds: ['trainer-lib'],
+      sourceNames: ['修改器知识库'],
+      multiSource: false,
+    }))
+}
+
+/**
+ * 离线兜底：优先给与关键词匹配的知识库条目，
+ * 关键词为空或知识库未命中时退回前 N 条 + 演示目录。
+ * 目的是「界面永远不空白」，且尽量给相关结果而不是固定 5 条。
+ */
+function fallbackOffline(keyword: string): OnlineResource[] {
+  const kw = (keyword ?? '').trim()
+  if (kw && trainersAvailable()) {
+    const hits = searchTrainers(kw, [], 200)
+    if (hits.length > 0) {
+      return hits.map((record) => ({
+        ...record,
+        sourceIds: ['trainer-lib'],
+        sourceNames: ['修改器知识库'],
+        multiSource: false,
+      }))
+    }
+  }
+  const bulk = trainersAsOnline()
+  if (bulk.length > 0) return bulk
+  return offlineAsOnline()
+}
+
 /** 并发拉取给定数据源，返回合并结果与逐源状态。 */
 async function pullAll(sources: SearchSource[], timeoutMs: number, keyword: string): Promise<{ items: OnlineResource[]; statuses: SourceStatus[] }> {
   const enabled = sources.filter((source) => source.enabled && source.url.trim())
@@ -767,9 +819,10 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
   let cachedAt = ''
 
   if (enabled.length === 0) {
-    // 未配置任何数据源：用旧式单目录接口 + 内置离线目录兜底，保证界面可用。
+    // 未配置任何数据源：用旧式单目录接口 + 内置知识库兜底，保证界面可用。
+    // 兜底优先级：在线单目录 > 修改器知识库（8943 条真实元数据）> 演示目录（5 条）。
     const single = await loadSingleCatalogAsOnline()
-    pool = single.items.length > 0 ? single.items : offlineAsOnline()
+    pool = single.items.length > 0 ? single.items : fallbackOffline(keyword)
     statuses = single.statuses
     live = single.items.length > 0
     // 仅在真的拿到在线目录时才记「采集时间」，否则应按离线兜底呈现。
@@ -827,7 +880,7 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
     }
   }
 
-  if (pool.length === 0) pool = offlineAsOnline()
+  if (pool.length === 0) pool = fallbackOffline(keyword)
   const origin: SearchResult['origin'] = live ? 'online' : cachedAt ? 'cache' : 'empty'
 
   const libraryGameNames = new Set<string>()

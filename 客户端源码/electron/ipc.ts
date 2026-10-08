@@ -42,8 +42,10 @@ import {
 } from './catalog.js'
 import { formatBytes, nowText, uid } from './util.js'
 import { diffSnapshot, probeSavePaths, recordSnapshot, type SnapshotState } from './savePathFinder.js'
+import { libraryInfo } from './savePathLibrary.js'
+import { searchTrainers, trainersForGame, trainersInfo } from './trainerLibrary.js'
 import { blankSource, clearSearchCache, searchCacheMeta, searchOnline, testSource } from './onlineSearch.js'
-import type { AppConfig, CatalogResource, Game, LibraryItem, LogEntry, ModEntry, SearchQuery, SearchSource } from './types.js'
+import type { AppConfig, CatalogResource, Game, LibraryItem, LogEntry, ModEntry, ResourceKind, SearchQuery, SearchSource } from './types.js'
 
 function toolsDir(): string {
   return app.isPackaged ? path.join(process.resourcesPath, 'tools') : path.join(app.getAppPath(), 'resources', 'tools')
@@ -281,11 +283,13 @@ export function registerIpc(): void {
     return result
   })
 
+  /** 存档路径知识库元信息：数据来源、收录规模，供设置页展示。 */
+  handle('saves:libraryInfo', () => libraryInfo())
+
   /**
    * 建立存档路径快照基线。传入 dirs 为空时，自动用探测结果里存在且得分较高的目录。
    * 只读扫描，不写入任何用户目录。
-   */
-  handle('saves:snapshotTake', (id: string, dirs?: string[]) => {
+   */  handle('saves:snapshotTake', (id: string, dirs?: string[]) => {
     const game = store.games().find((item) => item.id === id)
     if (!game) throw new Error('未找到该游戏。')
     let targets = (dirs ?? []).filter(Boolean)
@@ -411,6 +415,18 @@ export function registerIpc(): void {
     return added
   })
   handle('catalog:checkUpdates', () => checkUpdates())
+
+  /**
+   * 修改器 / MOD 元数据知识库：内置离线快照（机地社区帖）。
+   * 只返回元数据，不含下载直链；homepage 指向来源帖，由用户自行查看。
+   */
+  handle('trainers:info', () => trainersInfo())
+  handle('trainers:forGame', (gameName: string, aliases: string[] = []) =>
+    trainersForGame(gameName, aliases),
+  )
+  handle('trainers:search', (keyword: string, kinds: ResourceKind[] = [], limit = 200) =>
+    searchTrainers(keyword, kinds, limit),
+  )
 
   /** 在线聚合检索。force = true 时忽略缓存强制联网。只读，不写任何用户目录。 */
   handle('search:query', async (query: SearchQuery, force = false) => {

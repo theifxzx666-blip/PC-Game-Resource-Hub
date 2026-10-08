@@ -43,4 +43,7 @@ Desktop.ini
 .workbuddy/
 
 # 运行时数据目录（位于 %APPDATA%，仅作保险）
-data/
+# 注意：不能写成裸 `data/` —— 那会连 客户端源码/resources/data（内置知识库，必须入库）一起吞掉。
+/data/
+客户端源码/data/
+!客户端源码/resources/data/

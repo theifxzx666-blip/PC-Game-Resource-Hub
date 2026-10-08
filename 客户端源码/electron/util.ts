@@ -110,6 +110,32 @@ export function listFilesRecursive(dir: string): string[] {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// 游戏名归一化（主进程唯一真源）
+// ---------------------------------------------------------------------------
+//
+// 约束：electron/ 与 src/ 是两个独立编译单元（rootDir 不同），主进程代码
+// 无法 import 渲染进程的 src/utils/gameName.ts。因此本函数与
+// src/utils/gameName.ts 的 normKey 必须保持**逐字节一致**。
+//
+// 防漂移保障：scripts/verify-deps.cjs 同目录下的 tests 用同一份语料
+// 断言两边输出相同；改动任一侧都会让测试失败。
+
+/** 归一化时一律剥掉的符号（含商标号、度数、全角标点）。保留 CJK。 */
+const NORM_SYMBOLS =
+  /[™®©°′″·・:：,，.。!！?？'"“”‘’()（）[\]【】<>《》|｜/\\~～\-–—_+*&#@$%^;；＊]/g
+
+/**
+ * 游戏名 → 归一化键。剥掉全部符号与空白、转小写，保留 CJK。
+ * 与 src/utils/gameName.ts 的 normKey 同口径，勿单独修改。
+ */
+export function normKey(value: string): string {
+  return String(value == null ? '' : value)
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, '')
+    .replace(NORM_SYMBOLS, '')
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`

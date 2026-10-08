@@ -1,6 +1,6 @@
 {
   "name": "game-resource-hub-demo",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "PC 游戏资源服务工具客户端",
@@ -11,7 +11,8 @@
     "build": "npm run build:preload && vite build && tsc -p tsconfig.electron.json",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "verify:deps": "node scripts/verify-deps.cjs",
-    "package:win": "npm run build && electron-builder --win portable"
+    "package:win": "npm run build && electron-builder --win portable",
+    "verify:data": "node scripts/verify-data.cjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "*",
@@ -48,6 +49,10 @@
       {
         "from": "resources/tools",
         "to": "tools"
+      },
+      {
+        "from": "resources/data",
+        "to": "data"
       }
     ],
     "win": {

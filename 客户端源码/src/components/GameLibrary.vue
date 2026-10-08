@@ -271,6 +271,7 @@ const diffItems = ref<SaveDiffItem[]>([])
 const diffing = ref(false)
 
 const ORIGIN_LABEL: Record<SavePathOrigin, string> = {
+  library: '存档知识库',
   'known-rule': '内置规则',
   'game-name-dir': '目录名匹配',
   appdata: 'AppData',

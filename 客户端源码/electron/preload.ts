@@ -10,6 +10,7 @@ import type {
   LogEntry,
   ModEntry,
   ModProfile,
+  ResourceKind,
   SearchQuery,
   SearchSource,
   SearchResult,
@@ -63,6 +64,7 @@ const api = {
     export: (gameId: string, backupId: string) => invoke<string>('saves:export', gameId, backupId),
     import: (file: string) => invoke<BackupEntry[]>('saves:import', file),
     probePaths: (gameId: string) => invoke('saves:probePaths', gameId),
+    libraryInfo: () => invoke('saves:libraryInfo'),
     snapshotTake: (gameId: string, dirs?: string[]) => invoke('saves:snapshotTake', gameId, dirs),
     snapshotDiff: (gameId: string, dirs?: string[]) => invoke('saves:snapshotDiff', gameId, dirs),
   },
@@ -101,6 +103,17 @@ const api = {
     clearCache: () => invoke('search:clearCache'),
     cacheMeta: () => invoke<{ capturedAt: string; count: number }>('search:cacheMeta'),
     enqueueDownload: (resource: CatalogResource) => invoke<DownloadTask>('search:enqueueDownload', resource),
+  },
+
+  /**
+   * 修改器 / MOD 元数据知识库（内置离线快照）。
+   * 只返回元数据，无下载直链；homepage 指向来源帖。
+   */
+  trainers: {
+    info: () => invoke('trainers:info'),
+    forGame: (gameName: string, aliases: string[] = []) => invoke('trainers:forGame', gameName, aliases),
+    search: (keyword: string, kinds: ResourceKind[] = [], limit = 200) =>
+      invoke('trainers:search', keyword, kinds, limit),
   },
 
   library: {

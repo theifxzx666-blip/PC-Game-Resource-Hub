@@ -1,9 +1,12 @@
-// 存档路径自动定位：一键探测 + 快照差分（启动游戏前后对比文件变动）。
+// 存档路径自动定位：知识库 + 内置规则 + 目录名匹配 + 快照差分（四路合一）。
 //
-// 两条路径：
-//  1. probeSavePaths(): 扫描本机常见存档位置，按置信度打分排序，附带文件统计。
-//  2. 快照差分：recordSnapshot() 先给候选目录建立基线，diffSnapshot() 在启动游戏后
-//     对比出发生变动的目录，从而「实测」锁定真正的存档位置。
+// 候选来源优先级（高 → 低）：
+//  1. savePathLibrary：Ludusavi manifest 知识库（6613 款游戏的确切路径），
+//     优先按 Steam appid 精确命中，其次按名称兜底。
+//  2. 内置规则表：知识库未收录的热门游戏。
+//  3. 目录名匹配：扫描系统常见存档根目录，按游戏名词元匹配。
+//  4. 安装目录内扫描。
+//  快照差分独立于以上四路，用于「实测」确认真正发生变动的目录。
 //
 // 设计原则：只读扫描用户已授权的范围（游戏安装目录 + 系统存档常见根目录），
 // 不遍历整个磁盘；匹配不到时明确返回空列表而不是猜。
@@ -11,10 +14,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { expandPlaceholders } from './util.js'
+import { libraryInfo, lookupSaveLibrary, resolveSavePath } from './savePathLibrary.js'
 import type { Game } from './types.js'
 
 /** 候选来源，用于在界面上解释「为什么推荐它」。 */
 export type SavePathOrigin =
+  | 'library' // 命中 Ludusavi 存档路径知识库
   | 'known-rule' // 命中了内置规则表
   | 'game-name-dir' // 目录名与游戏名匹配
   | 'appdata' // 来自 %APPDATA% / %LOCALAPPDATA%
@@ -40,6 +45,8 @@ export interface SavePathCandidate {
   lastModified: string
   /** 面向用户的一句话理由 */
   reason: string
+  /** 知识库标注的路径用途标签（config / save 等） */
+  tags?: string[]
 }
 
 export interface ProbeResult {
@@ -49,6 +56,16 @@ export interface ProbeResult {
   scannedRoots: string[]
   /** 被跳过的原因（例如未配置安装目录） */
   skipped: string[]
+  /** 本次探测的知识库命中情况，供界面提示数据来源 */
+  library: {
+    available: boolean
+    /** 知识库中命中的游戏名（未命中为空） */
+    matched: string
+    /** 命中方式 */
+    matchBy: 'steam' | 'name' | ''
+    /** 知识库统计的路径条数 */
+    pathCount: number
+  }
 }
 
 /** 内置规则：游戏名关键词 → 相对系统存档根目录的子路径。 */
@@ -274,15 +291,93 @@ function isNoiseDirName(name: string): boolean {
   return NOISE_FRAGMENTS.some((frag) => lower.includes(frag))
 }
 
+/**
+ * 从知识库取候选路径（最高优先级来源）。
+ *
+ * 路径可能含 `<storeUserId>`（通配符）或 `<base>`（游戏安装目录）：
+ * - `<storeUserId>` 未替换时保留 `*`，这里展开「* 目录」为实际子目录后再入候选；
+ * - `<base>` 需要游戏安装目录，未配置游戏目录时跳过该条。
+ */
+function fromLibrary(game: Game): {
+  candidates: SavePathCandidate[]
+  matched: string
+  matchBy: 'steam' | 'name' | ''
+  pathCount: number
+  availableHint: boolean
+} {
+  const info = libraryInfo()
+  const empty = {
+    candidates: [] as SavePathCandidate[],
+    matched: '',
+    matchBy: '' as const,
+    pathCount: 0,
+    availableHint: info.available,
+  }
+  if (!info.available) return empty
+
+  const matchBy: 'steam' | 'name' = game.appid || game.steamAppId ? 'steam' : 'name'
+  const hit = lookupSaveLibrary(game)
+  if (!hit) return { ...empty, matchBy }
+
+  const label = hit.title || hit.name
+  const out: SavePathCandidate[] = []
+
+  for (const entry of hit.paths) {
+    const resolved = resolveSavePath(entry.raw, { gameDir: game.dir })
+    if (!resolved) continue
+    const reason = `存档路径知识库（Ludusavi）命中${matchBy === 'steam' ? ' Steam appid' : '游戏名'}：${label}`
+    const tags = entry.tags ?? []
+
+    if (resolved.wildcard) {
+      // 通配符段（通常是 Steam 账号 ID 目录）：展开为实际子目录逐个入候选
+      for (const actual of expandWildcard(resolved.path)) {
+        out.push(makeCandidate(actual, 'library', 99, `${reason}（含账号 ID 目录）`, tags))
+      }
+    } else {
+      out.push(makeCandidate(resolved.path, 'library', 99, reason, tags))
+    }
+  }
+
+  return { candidates: out, matched: label, matchBy, pathCount: hit.paths.length, availableHint: true }
+}
+
+/** 展开路径里的 `*` 段：只对「*」所在的直接父目录列一层。 */
+function expandWildcard(target: string): string[] {
+  const starIndex = target.indexOf('*')
+  if (starIndex < 0) return [target]
+  const sep = path.sep
+  const head = target.slice(0, starIndex)
+  const tail = target.slice(starIndex + 1)
+  const parent = head.endsWith(sep) ? head.slice(0, -1) : path.dirname(head.replace(/[\\/]+$/, ''))
+  const root = parent || head
+  try {
+    if (!fs.existsSync(root)) return []
+    const out: string[] = []
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      out.push(path.normalize(`${root}${sep}${entry.name}${tail}`))
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
 function makeCandidate(
   rawPath: string,
   origin: SavePathOrigin,
   score: number,
   reason: string,
+  tags: string[] = [],
 ): SavePathCandidate {
-  // 模板里用正斜杠书写更易读，这里统一normalize成当前平台的分隔符
+  // 模板里用正斜杠书写更易读，这里统一 normalize 成当前平台的分隔符
   const expanded = path.normalize(path.resolve(expandPlaceholders(rawPath)))
-  const exists = fs.existsSync(expanded) && fs.statSync(expanded).isDirectory()
+  let exists = false
+  try {
+    exists = fs.statSync(expanded).isDirectory()
+  } catch {
+    exists = false
+  }
   const stat = exists ? fileStatCount(expanded) : { fileCount: 0, sizeBytes: 0, lastModified: '' }
   return {
     path: expanded,
@@ -293,6 +388,7 @@ function makeCandidate(
     sizeBytes: stat.sizeBytes,
     lastModified: stat.lastModified,
     reason,
+    tags: tags.length > 0 ? tags : undefined,
   }
 }
 
@@ -429,6 +525,18 @@ export function probeSavePaths(game: Game): ProbeResult {
   const skipped: string[] = []
   const collected: SavePathCandidate[] = []
 
+  // ① 知识库（最高优先级）：优先 Steam appid 精确命中，其次按名称兜底
+  const lib = fromLibrary(game)
+  collected.push(...lib.candidates)
+  if (lib.matched) {
+    const missing = lib.candidates.filter((c) => !c.exists).length
+    if (missing > 0) {
+      skipped.push(
+        `知识库收录了该游戏的 ${lib.pathCount} 条路径，其中 ${missing} 条在本机不存在（游戏可能尚未安装到该位置，或还没保存过存档）。`,
+      )
+    }
+  }
+
   collected.push(...fromKnownRules(game))
 
   const roots: string[] = []
@@ -458,6 +566,12 @@ export function probeSavePaths(game: Game): ProbeResult {
     candidates,
     scannedRoots: roots,
     skipped,
+    library: {
+      available: lib.availableHint,
+      matched: lib.matched,
+      matchBy: lib.matchBy,
+      pathCount: lib.pathCount,
+    },
   }
 }
 

@@ -35,9 +35,10 @@
 | 领域 | 能力 |
 | --- | --- |
 | Game Library | Steam 库自动扫描、手动添加、封面图标自动获取、按名称匹配 Steam 资料页 |
-| Save Manager | 备份 / 恢复 / 轮换 / 固定 / 导出导入，**存档路径自动定位**（探测 + 快照差分） |
+| Save Manager | 备份 / 恢复 / 轮换 / 固定 / 导出导入，**存档路径自动定位**（6613 款游戏知识库 + 探测 + 快照差分） |
 | Mod Manager | 多格式导入、安装计划预览、复制式安装、卸载、冲突检测、配置档案（Profile） |
 | Resource Center | 多数据源聚合检索、多维筛选、下载队列、本地导入、版本更新检查 |
+| Knowledge Base | **内置离线知识库**：6613 款游戏 × 15042 条存档路径、142 条游戏别名、8943 条修改器/MOD 元数据，随包分发、离线可用 |
 | Governance | 操作记录（最多 500 条）、破坏性操作保留还原点或部署记录 |
 
 ### 1.3 交付形态
@@ -78,9 +79,38 @@
 
 - 游戏图标优先取 **Steam 本地封面缓存**，其次 exe 内嵌图标，最后才走 CDN。
 - 资源目录无网时走 `offlineCatalog.ts` 内置数据。
+- **内置知识库随包分发**（`resources/data/`，未打进 asar，可热替换）：
+  存档路径库 6613 款、游戏别名 142 条、修改器/MOD 元数据 8943 条。开箱即用，不需要联网初始化。
 - 存档路径探测只读本机目录，不依赖任何在线库。
 
-### 2.5 不做事清单（立项排除，等于设计约束）
+**知识库兜底优先级**（逐级下降，界面永不空白）：
+
+```
+用户配置的在线数据源
+  └─ 失败 ↓
+本地检索缓存（TTL 内）
+  └─ 失败 ↓
+内置修改器/MOD 知识库（8943 条，按关键词命中排序）
+  └─ 无命中 ↓
+演示目录（offlineCatalog，5 条）
+```
+
+### 2.5 合规边界：知识库只存元数据
+
+内置的修改器/MOD 知识库是**离线元数据快照**，构建期即已剥离下载直链：
+
+| 字段 | 取值 | 原因 |
+| --- | --- | --- |
+| `downloadUrl` | 恒空串 | 不提供抓取/分发能力 |
+| `fileName` | 恒空串 | 不指向任何可下载对象 |
+| `homepage` | 来源帖子页 | 用户自行在浏览器查看 |
+| `linkKinds` | 仅分类名（如「百度网盘」） | 保留信息量，不携带链接 |
+| `status` | 恒「待核实」 | 未经本项目核验 |
+| `risk` | 修改器「中」/ MOD「低」 | 内存修改类工具默认更高风险 |
+
+该约束由 `npm run verify:data` 强制校验 —— 一旦数据集里出现 `downloadUrl` 或 `fileName`，校验立即失败。
+
+### 2.6 不做事清单（立项排除，等于设计约束）
 
 不实现反作弊规避、DRM 绕过、破解分发、联网游戏辅助、账号体系规避。客户端**不内置任何修改器本体**，只做资源目录、下载与本地管理。文件写入仅限用户显式配置的路径与工具自身数据目录，不扫描无关目录。
 
@@ -144,12 +174,14 @@ electron-builder --win portable → release/*.exe
 | `electron/steamLocate.ts` | Steam 安装根目录与 `steam.exe` 定位（含缓存） |
 | `electron/steamStore.ts` | Steam 商城搜索、封面下载、本地封面缓存路径解析 |
 | `electron/saves.ts` | 备份 / 恢复 / 轮换 / 固定 / 导出 / 导入 |
-| `electron/savePathFinder.ts` | 存档路径一键探测 + 启动前后快照差分 |
+| `electron/savePathLibrary.ts` | **存档路径知识库**：加载 `save-paths.json`、占位符解析、Steam ID / 名称双索引 |
+| `electron/savePathFinder.ts` | 存档路径一键探测（知识库优先）+ 启动前后快照差分 |
+| `electron/trainerLibrary.ts` | **修改器/MOD 元数据知识库**：加载 `trainers.json`、游戏名索引、关键词检索 |
 | `electron/mods.ts` | 导入 / 安装计划 / 安装 / 卸载 / 冲突 / 配置档案 |
 | `electron/catalog.ts` | 在线目录拉取与缓存、下载队列、本地导入、更新检查 |
 | `electron/onlineSearch.ts` | 多源聚合检索（解析、去重合并、打分、缓存降级） |
 | `electron/presetSources.ts` | 内置预置数据源（GameBanana / GitHub） |
-| `electron/offlineCatalog.ts` | 内置离线兜底目录 |
+| `electron/offlineCatalog.ts` | 内置演示兜底目录（5 条） |
 
 ### 3.4 渲染层结构
 
@@ -181,8 +213,15 @@ PC游戏资源服务工具/
 ├─ 客户端源码/                   Electron + Vue 3 + TypeScript 工程
 │  ├─ electron/                 主进程与预加载
 │  ├─ src/                      渲染进程
-│  ├─ resources/tools/          随包解压工具（二进制不入库，见 §7.3）
-│  ├─ scripts/verify-deps.cjs   依赖完整性自检（还原被误改名的包文件）
+│  ├─ resources/
+│  │  ├─ data/                  ★ 内置知识库（随包分发，离线可用）
+│  │  │  ├─ save-paths.json     存档路径库：6613 款 × 15042 条
+│  │  │  ├─ name-aliases.json   游戏别名表：142 条
+│  │  │  └─ trainers.json       修改器/MOD 元数据：8943 条（无下载直链）
+│  │  └─ tools/                 随包解压工具（二进制不入库，见 §7.3）
+│  ├─ scripts/
+│  │  ├─ verify-deps.cjs        依赖完整性自检（还原被误改名的包文件）
+│  │  └─ verify-data.cjs        ★ 数据与契约校验（含 normKey 双实现一致性）
 │  ├─ package.json / package-lock.json
 │  ├─ tsconfig.json / tsconfig.electron.json / vite.config.ts
 │  └─ THIRD_PARTY_NOTICES.md    第三方声明（唯一维护文件）
@@ -196,6 +235,8 @@ PC游戏资源服务工具/
 ```
 
 > 便携版 `*.exe`、`node_modules`、构建产物、本机临时区与日志、以及含委托方信息的立项文档均已加入 `.gitignore`，不入库。
+>
+> ⚠️ `.gitignore` 中的运行时数据规则必须写成 `/data/` 而不能是裸 `data/` —— 后者会连 `客户端源码/resources/data/`（内置知识库）一起吞掉。已用 `!客户端源码/resources/data/` 显式解除。
 
 ---
 
@@ -237,6 +278,7 @@ PC游戏资源服务工具/
 - 多源聚合检索（关键词 + 游戏 / 类型 / 来源 / 状态 / 风险 / 标签 / 仅已入库游戏 + 排序 + 分页）。
 - 顶部展示结果来源（实时联网 / 本地缓存 / 离线兜底）、耗时、正常源数量；失败源逐条告警。
 - 下载队列（进度推送）、本地导入、版本更新检查；检索结果可直接投递下载队列。
+- **离线知识库兜底**：无网或全部数据源失败时，从 8943 条内置修改器/MOD 元数据里按关键词返回相关结果（详见 §6.4）。
 
 ### 5.6 操作记录 / 设置
 
@@ -305,15 +347,59 @@ data/
 └─ staging/                        导入解压临时区（用完即删）
 ```
 
-### 6.3 存档路径自动定位（`savePathFinder.ts`）
+### 6.3 存档路径自动定位（`savePathLibrary.ts` + `savePathFinder.ts`）
 
-**两路并存**，弹窗候选列表统一打分排序：
+**三路并存**，候选列表统一打分排序，来源用 `origin` 字段区分：
+
+| 优先级 | 来源（`origin`） | 分值 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `library` | 99 | 内置知识库命中（6613 款 × 15042 条路径） |
+| 2 | `snapshot` | 95 | 启动前后快照差分命中 |
+| 3 | `known-rule` | 85 | 15 条热门游戏内置规则 |
+| 4+ | `game-name-dir` / `appdata` / `documents` … | 递减 | 目录名扫描与惯例位置 |
+
+#### 6.3.1 知识库（`savePathLibrary`）
+
+数据源为 **Ludusavi manifest（MIT）** 的转换产物 `resources/data/save-paths.json`（2.73 MB）：
+
+```
+games[]    6613 款：{ k, name, title, steamId, installDir, cloud[], paths[], regs? }
+bySteamId  { "<appid>": <games 下标> }      ← 与 Steam 库扫描结果直接 join
+paths[]    { raw, ph[], tags? }             ← raw 为 POSIX 正斜杠书写
+```
+
+**匹配顺序**：先按 `steamId` 精确查（**零模糊匹配**），查不到再按名称 + 别名兜底。
+
+> **为什么用 appid 做 joinKey**：Steam 扫描结果本身带 appid，知识库也用 appid 建索引，两边直接对接，不经过任何字符串相似度计算 —— 从根上消除「同名不同游戏」误配。
+
+> **斜杠切段的重要性**：`title` 是「中文/英文/别名」的斜杠拼接串。必须按 `/` 切段后**逐段建键**；整串归一化会让匹配率从 ~79% 掉到 2%。
+
+#### 6.3.2 占位符解析
+
+Ludusavi 用 16 个占位符书写路径，解析时必须**最长优先**替换：
+
+```typescript
+['<home>', d.home],
+['<winLocalAppDataLow>', d.localLow],  // ← 必须先于下一条，否则会被截断
+['<winLocalAppData>',   d.local],
+['<winAppData>',        d.roaming],
+// … <winDocuments> <winSavedGames> <winPublic> <winProgramData>
+//    <winDir> <osUserName> <root>
+```
+
+- `<storeUserId>` **不替换**，保留为通配符，由 `expandWildcard()` 列父目录后逐个展开（MS Store 游戏的账号 ID 目录名不可预测）。
+- `<xdgData>` / `<xdgConfig>` / `<xdgCache>` 在 Windows 上判为不适用，直接跳过。
+- 路径书写用 POSIX 正斜杠，Windows 侧由 `path.join` 兜住，不手工拼分隔符。
+
+#### 6.3.3 规则表与快照差分（`savePathFinder`）
+
+知识库未命中时的兜底：
 
 1. **一键探测**：15 条热门游戏内置规则表（星露谷 / 巫师 3 / 艾尔登法环 / 博德之门 3 / 赛博朋克 2077 / 上古卷轴 5 / 辐射 4 / 空洞骑士 / 泰拉瑞亚 / 饥荒 / 黑魂 / 怪猎 / 生化危机 / 仁王 / 尼尔），加目录名关键字扫描。
    - 扫描根：`%APPDATA%`、`%LOCALAPPDATA%`、`Documents\My Games`、`Saved Games`、`Documents`、`AppData\LocalLow`、游戏安装目录。
    - 上限保护：`MAX_DEPTH = 4`、`MAX_COUNT_FILES = 2000`，避免大目录卡死。
 
-2. **快照差分**：先建立基线快照（记录目录内文件数 / 体积 / 最近 mtime），启动游戏并保存进度后对比，命中的目录直接作为**高置信候选**（`snapshot` 来源）。
+2. **快照差分**：先建立基线快照（记录目录内文件数 / 体积 / 最近 mtime），启动游戏并保存进度后对比，命中的目录直接作为**高置信候选**。
 
 **防误报三道闸**（首轮实测曾命中 `DingTalk\...\de`、`npm-cache\_cacache\index-v5\de` 这类噪音目录）：
 
@@ -325,7 +411,77 @@ data/
 
 修复后误报从 4 条降到 **0 条**。
 
-### 6.4 游戏图标与主程序识别（`gameArt.ts`）
+报告文案会区分两种情况，避免「知识库有但我们没找到」被误解为「没有这条数据」：
+
+> 知识库收录了该游戏的 **N** 条路径，其中 **M** 条在本机不存在（游戏可能尚未安装到该位置，或还没保存过存档）。
+
+### 6.4 修改器 / MOD 元数据知识库（`trainerLibrary.ts`）
+
+`resources/data/trainers.json`（8.32 MB，8943 条 = 7825 MOD + 1118 修改器）是社区帖的**离线元数据快照**。
+
+```
+resources[]  { id, title, kind, gameName, risk, status, description,
+               source, homepage, tags[],
+               cover, linkKinds[], linkCount, postedAt }   ← 后四项为扩展字段
+stats        { total, byKind, withLinks, byNetdisk }
+```
+
+**检索能力**：
+
+- `trainersForGame(gameName, aliases)` — 按游戏名取该游戏全部条目（**值为数组**：同一游戏常有几十条 MOD，不能只留一条）。
+- `searchTrainers(keyword, kinds, limit)` — 标题 + 游戏名 + 描述 + 标签的归一化子串检索。
+
+**接入位置**：作为 `onlineSearch` 的**离线兜底层**。当在线源全部失败、缓存过期时，用 `fallbackOffline(keyword)` 优先返回与关键词匹配的知识库条目（按相关性排序），而不是固定 5 条演示数据。
+
+**归一化复用**：与存档路径库共用 `util.ts` 的 `normKey`。这是刻意的 —— 同一语义的清洗规则只能有一份，否则同一款游戏在两个模块里会算出两个键。
+
+### 6.5 名称归一化的双实现与防漂移（`util.ts` ↔ `src/utils/gameName.ts`）
+
+**这是一个已知的设计张力，必须显式记录。**
+
+`electron/` 与 `src/` 是两个独立编译单元（`tsconfig.electron.json` 的 `rootDir` 为 `electron`），主进程代码**无法** import 渲染进程的 `src/utils/gameName.ts`。因此归一化函数在两侧各有一份：
+
+| 位置 | 消费者 | 内容 |
+| --- | --- | --- |
+| `electron/util.ts` → `normKey` | 主进程：在线检索去重、知识库建键、别名匹配 | 唯一真源 |
+| `src/utils/gameName.ts` → `normKey` | 渲染进程：名称比对与展示 | 镜像实现 |
+
+**防漂移机制**：`npm run verify:data` 会
+
+1. 从两个源文件里正则提取符号表字面量，断言**逐字符一致**；
+2. 用 18 条共享语料（含 CJK、商标号、全角标点、斜杠拼接）跑两边实现，断言输出相同；
+3. 断言关键性质：CJK 保留、空白与大小写处理、符号剥离完整。
+
+任一侧被单独修改，校验立即失败。
+
+**核心规则**（移植自上游，保留两条护栏）：
+
+```typescript
+// 剥符号但保留 CJK
+const SYMBOLS = /[™®©°′″·・:：,，.。!！?？'"“”‘’()（）[\]【】<>《》|｜/\\~～\-–—_+*&#@$%^;；＊]/g
+// 代际数字防误配：查询带代际数字而目标没有 → 拒绝
+//   《The Sims 4》查到 Skyrim 不会被误配
+```
+
+**代际数字护栏**（`numMismatch`）：查询含 `4` 而目标不含，判为不匹配。避免「The Sims 4」误配到「The Sims 3」—— 这对修改器/MOD 匹配尤其关键，跨代际的修改器用上去会直接崩游戏。
+
+### 6.6 日期归一与网盘链接抽取（`src/utils/sourceText.ts`）
+
+移植自上游 `shared.js` 的两个纯函数，供渲染层展示用：
+
+- **`normDate(input)`** — 处理**贪婪正则吃位**这个真实陷阱：
+
+  ```
+  输入 "2026/9/8"  →  正则 \d{1,2} 贪婪吞掉后续数字  →  2026/9/89  →  Invalid Date
+  ```
+
+  还原策略：`day > 31` 时只取被吞数字的**首位**，再用 `Date.UTC` 构造并**反向校验**月/日是否被规范化（`dt.getUTCMonth() !== month - 1` 则判为非法日期）。
+
+- **`extractLinks(text)`** — 用 10 条网盘识别表（`NETDISK`）给链接分类（百度 / 夸克 / 迅雷 / 移动云盘 / UC …），并过滤站内跳转链接。
+
+  > 上游踩过的坑：`extractLinks` 曾在两个文件里各写一份，**上限一个 12 一个 20、一个过滤站内一个不**，同一份正文抽出不同结果。本项目只保留一份实现。
+
+### 6.7 游戏图标与主程序识别（`gameArt.ts`）
 
 图标来源优先级（**离线优先**）：
 
@@ -351,7 +507,7 @@ data/
 
 > 纯启发式「取最大 exe」会误选 `UnityCrashHandler64.exe`（1.6 MB > 真实主程序 0.9 MB）或更深的 `wallpaperui.exe`（12.7 MB）。加入噪音黑名单与共享前缀加权后，在 4 个真实游戏目录上复验全部命中。
 
-### 6.5 在线聚合检索（`onlineSearch.ts`）
+### 6.8 在线聚合检索（`onlineSearch.ts`）
 
 **数据源契约**（4 种 kind）：
 
@@ -376,18 +532,18 @@ data/
 
 > 候选源实测结论：PCGamingWiki Cargo API `403`（Cloudflare）、Nexus Mods API `401`（需 OAuth）、ModDB RSS `403`、Thunderstore 单次响应 **332 MB** —— 均未采用。
 
-### 6.6 解压安全（`archive.ts`）
+### 6.9 解压安全（`archive.ts`）
 
 解压前**先列出条目**，拒绝含绝对路径或 `..` 的越界条目，再执行解压；`staging/` 作为中间区，用完即删。解压工具探测顺序：用户配置路径 → 随包 `resources/tools/7za.exe`。
 
-### 6.7 MOD 安装的还原点与回滚（`mods.ts`）
+### 6.10 MOD 安装的还原点与回滚（`mods.ts`）
 
 1. 计算安装计划 → 展示覆盖数量。
 2. 对每个将被覆盖的现存目标文件，先复制到 `mods/restore/<MOD id>/<时间戳>/`。
 3. 执行复制；任一步失败 → 回滚本批已复制文件。
 4. 写入部署记录（`DeployRecord{ source, target, created }`），卸载时据此逆操作并清理空目录。
 
-### 6.8 本机构建环境的已知坑位
+### 6.11 本机构建环境的已知坑位
 
 以下为离线 / 受限环境下的实际踩坑记录，复现构建前建议先过一遍：
 
@@ -431,10 +587,13 @@ npm run dev
 # 3) 类型检查
 npm run typecheck          # vue-tsc --noEmit + tsc -p tsconfig.electron.json --noEmit
 
-# 4) 仅构建产物
+# 4) 数据与契约校验（含 normKey 双实现一致性）
+npm run verify:data
+
+# 5) 仅构建产物
 npm run build
 
-# 5) 打 Windows 便携版（输出到 客户端源码/release）
+# 6) 打 Windows 便携版（输出到 客户端源码/release）
 npm run package:win
 ```
 
@@ -459,8 +618,20 @@ npm run package:win
 | 0.4.0 | 在线聚合检索 | **48/48 断言通过**（含单源失败隔离、超时隔离 1519 ms、缓存命中不发请求、离线降级） |
 | 0.5.0 | 开源数据源接入 | **62/62 通过**；真实联网冒烟 2/2 源可用（GameBanana 11 条 / GitHub 30 条） |
 | 0.6.0 | 游戏库修复与图标 | **46/46 通过**；Steam 联网冒烟 3/3 PASS；4 个真实游戏目录主程序识别全中 |
+| 0.7.0 | 内置知识库接入 | **`npm run verify:data` 6/6 通过**；6613 款存档路径 + 142 别名 + 8943 条修改器元数据随包分发；`normKey` 双实现一致性通过（18 条语料） |
 
 每轮均执行 `vue-tsc --noEmit` 与 `tsc -p tsconfig.electron.json --noEmit`，并以「受控启动 + 数据目录落盘」判定运行期可用性。
+
+### 8.1 `verify:data` 校验项
+
+| # | 校验 | 通过标准 |
+| --- | --- | --- |
+| A1 | `save-paths.json` 结构 | ≥6000 款、≥14000 条路径、`bySteamId` 无悬空索引 |
+| A2 | 占位符白名单 | 全部路径的 `ph[]` 都在解析器支持列表内（漏一个就会残留 `<xxx>` 字面量） |
+| A3 | `name-aliases.json` 结构 | ≥100 条、无自指、无空值 |
+| A4 | `trainers.json` 结构 | ≥8000 条；**`downloadUrl` / `fileName` 必须全空**（合规红线）；`homepage` 必须是 http(s) |
+| B | `normKey` 双实现一致 | 符号表字面量逐字符相同 + 18 条语料两边输出相同 + CJK 保留/符号剥离性质成立 |
+| C | 占位符解析 | 最长优先替换正确（`<winLocalAppDataLow>` 不被 `<winLocalAppData>` 截断）、`<storeUserId>` 保留为通配符 |
 
 ---
 
@@ -471,6 +642,7 @@ npm run package:win
 - 仅面向单机、本地文件与可追溯资源场景。
 - **不提供**联网游戏辅助、反作弊规避、DRM 绕过、账号体系规避与破解分发。
 - 客户端不内置任何修改器本体，只做资源目录、下载与本地管理。
+- **内置知识库只存元数据**：修改器/MOD 条目的 `downloadUrl` 与 `fileName` 恒为空，只保留来源帖地址与网盘平台分类；该约束由 `npm run verify:data` 强制。
 - 文件写入仅限用户显式配置的路径与工具自身数据目录，**不扫描无关目录**。
 - 破坏性操作（恢复存档、安装 / 卸载 MOD）均保留还原点或部署记录。
 
@@ -478,10 +650,14 @@ npm run package:win
 
 | 组件 | 许可证 | 使用方式 |
 | --- | --- | --- |
+| [Ludusavi](https://github.com/mtkennerly/ludusavi) | MIT | 其 manifest 存档路径数据经转换后作为内置知识库 `resources/data/save-paths.json` 分发（6613 款 / 15042 条）；仅使用数据，未调用其代码 |
+| [game-aggregator](https://github.com/A13612812330/game-aggregator) | — | 参考其数据组织方式；移植 `name-normalize.js`（名称归一化）与 `shared.js`（日期归一 / 网盘识别）的算法至本项目 TS 侧；修改器/MOD 元数据由其离线数据集转换而来 |
 | [mayflyMods](https://github.com/aojiangfuyou1/mayflyMods) | MIT | 改编路径工具函数至 `客户端源码/src/utils/modPath.ts` |
 | [Game-Save-Manager](https://github.com/dyang886/Game-Save-Manager) | GPL-3.0 | **仅参考产品流程**，未复制或链接其源码 |
 | [Game-Cheats-Manager](https://github.com/dyang886/Game-Cheats-Manager) | — | 仅作资源目录与状态展示的产品参考，未复制源码；其「反作弊绕过提示」「Defender 白名单」属立项排除范围 |
 | [7-Zip](https://www.7-zip.org/) | LGPL-2.1+ / unRAR restriction | 以独立可执行文件随包分发，通过子进程调用，未静态链接 |
+
+> **数据来源说明**：内置修改器/MOD 知识库（`trainers.json`）是社区公开帖的离线元数据快照，**已剥离全部下载直链**，仅保留标题、所属游戏、来源页与网盘平台分类。该数据集不构成分发行为，相关内容的权利归原始发布者所有；若权利人要求移除，可通过仓库 Issue 联系。
 
 完整声明见 [`客户端源码/THIRD_PARTY_NOTICES.md`](客户端源码/THIRD_PARTY_NOTICES.md)。
 
@@ -497,7 +673,11 @@ npm run package:win
 
 **Architecture.** Electron main process (`客户端源码/electron`) owns the file system, archive subprocesses, Steam scanning, HTTP download/search and JSON persistence. The renderer (Vue 3 + Element Plus + Pinia, `客户端源码/src`) is sandboxed — `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true` — and reaches system capabilities only through `window.api`, exposed by `preload.cjs` via `contextBridge`. Every IPC call returns `{ ok: true, data } | { ok: false, error }`.
 
-**Pluggable data sources.** Online search is not bound to any single backend. Sources are a configuration list of four kinds — `json`, `rss`, `gamebanana`, `github` — fetched concurrently with per-source timeouts and full error isolation. A three-level degradation chain (live network → local TTL cache → bundled offline catalog) guarantees the UI is never empty.
+**Pluggable data sources.** Online search is not bound to any single backend. Sources are a configuration list of four kinds — `json`, `rss`, `gamebanana`, `github` — fetched concurrently with per-source timeouts and full error isolation. A four-level degradation chain (live network → local TTL cache → bundled trainer metadata library → demo catalog) guarantees the UI is never empty.
+
+**Bundled knowledge base.** `客户端源码/resources/data/` ships outside the asar and is hot-swappable: `save-paths.json` (6,613 games × 15,042 save paths, converted from the Ludusavi manifest, MIT), `name-aliases.json` (142 aliases), and `trainers.json` (8,943 trainer/MOD metadata records). Save-path lookup joins on Steam appid — a zero-fuzzy-match join that eliminates same-name mismatches at the root.
+
+**Metadata only.** The bundled trainer/MOD library is an offline metadata snapshot with all download links stripped at build time: `downloadUrl` and `fileName` are always empty strings, `homepage` points to the source post, and `linkKinds` keeps only the platform category (e.g. "百度网盘"). Enforced by `npm run verify:data`.
 
 **Offline-first.** Game icons prefer the local Steam library cache, then the embedded exe icon, and only then the Steam CDN. Save-path detection scans local directories only.
 
@@ -508,7 +688,9 @@ npm run package:win
 ```bash
 cd 客户端源码
 npm install --registry=https://registry.npmmirror.com
+npm run verify:deps
 npm run typecheck
+npm run verify:data
 npm run build
 npm run package:win
 ```
@@ -517,4 +699,4 @@ A portable `*.exe` is emitted to `客户端源码/release`. `resources/tools/7za
 
 ---
 
-*文档版本：0.6.0 · 最近更新：2026-10-08*
+*文档版本：0.7.0 · 最近更新：2026-10-08*
