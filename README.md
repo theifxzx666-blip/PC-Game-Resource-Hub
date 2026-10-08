@@ -608,6 +608,7 @@ const SYMBOLS = /[™®©°′″·・:：,，.。!！?？'"“”‘’()（）
 
 | 版本 | 文件 | 大小 | MD5 |
 | --- | --- | --- | --- |
+| 0.7.1 | [`PC-Game-Resource-Hub-0.7.1-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.7.1/PC-Game-Resource-Hub-0.7.1-portable.exe) | 106,522,288 字节 | `d4ef0082c873a3702785ee05dead70bc` |
 | 0.7.0 | [`PC-Game-Resource-Hub-0.7.0-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.7.0/PC-Game-Resource-Hub-0.7.0-portable.exe) | 106,432,764 字节 | `38ffea55a7b104487dab1ce875b4e52a` |
 | 0.6.0 | [`PC-Game-Resource-Hub-0.6.0-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.6.0/PC-Game-Resource-Hub-0.6.0-portable.exe) | 104,969,924 字节 | `6e24d1b2c9533aff23f264621792c9ec` |
 
