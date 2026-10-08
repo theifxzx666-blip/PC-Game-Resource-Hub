@@ -2,7 +2,7 @@
 
 面向单机 PC 玩家的**本地优先（local-first）**游戏资源桌面工具：把「游戏库管理 / 存档备份恢复 / MOD 启停 / 资源检索下载」收敛到一个 Windows 客户端里，所有破坏性操作都可回退。
 
-> 当前版本 **0.7.0**（Electron 44 + Vue 3 + TypeScript）
+> 当前版本 **0.7.1**（Electron 44 + Vue 3 + TypeScript）
 > 形态：Windows 便携版单文件 EXE（portable），免安装、绿色运行。
 > 数据目录：`%APPDATA%\PCGameResourceHub\data`
 > 下载：[Releases](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases) · 源码与说明见下方各节
@@ -38,7 +38,7 @@
 | Save Manager | 备份 / 恢复 / 轮换 / 固定 / 导出导入，**存档路径自动定位**（6613 款游戏知识库 + 探测 + 快照差分） |
 | Mod Manager | 多格式导入、安装计划预览、复制式安装、卸载、冲突检测、配置档案（Profile） |
 | Resource Center | 多数据源聚合检索、多维筛选、下载队列、本地导入、版本更新检查 |
-| Knowledge Base | **内置离线知识库**：6613 款游戏 × 15042 条存档路径、142 条游戏别名、8943 条修改器/MOD 元数据，随包分发、离线可用 |
+| Knowledge Base | **内置离线知识库**：6613 款游戏 × 15042 条存档路径、6485 条游戏别名、8943 条修改器/MOD 元数据，随包分发、离线可用 |
 | Governance | 操作记录（最多 500 条）、破坏性操作保留还原点或部署记录 |
 
 ### 1.3 交付形态
@@ -67,33 +67,64 @@
 
 ### 2.3 数据源可插拔，界面永不空白
 
-在线检索不绑死任何单一后端：数据源是一份**可增删改的配置列表**（`json` / `rss` / `gamebanana` / `github`）。三级降级链路：
+在线检索不绑死任何单一后端：数据源是一份**可增删改的配置列表**（`json` / `rss` / `gamebanana` / `github`）。
+
+**内置知识库是一等数据源，不是"最后的兜底"。** 这一点很关键 —— 早期版本把知识库写成「只有在线源一条都没拉到才用」，结果配了预置源后，在线源总是能返回**一些**结果（尽管往往不相关），知识库便永远轮不上：
 
 ```
-真实联网  →  本地检索缓存（TTL）  →  内置离线兜底目录
-   ↓              ↓                      ↓
+搜「星露谷物语」
+  → GitHub 返回 195 个「星露谷物语复刻版 / MOD 安装器 / 类似星露谷的游戏」
+  → pool 非空，知识库被跳过
+  → 过滤无关项目后：0 条结果
+  → 知识库里 348 条真正的星露谷 MOD 一条都搜不到
+```
+
+现在的设计是**并入再排序**，而非逐级替换：
+
+```
+有关键词
+  ├─ 在线关键词源实时拉取（GameBanana / GitHub …）
+  └─ 内置知识库按别名展开 + 名称索引检索
+       ↓  合并去重（mergeOnline）
+      统一按 relevance 打分排序
+        · 游戏名精确匹配  200 分   ← 最强信号
+        · 游戏名以词开头  120 分
+        · 标题包含关键词   50 分   ← 仅作补充
+       ↓
+      分页返回
+```
+
+「降级」只发生在**取数阶段**，且是逐源独立的：
+
+```
+真实联网  →  本地检索缓存（TTL）  →  内置知识库  →  演示目录（5 条）
+   ↓              ↓                    ↓              ↓
   单源失败只降级为该源 0 条 + 状态提示，不影响其他源
 ```
+
+来源判定（界面顶部标签）也随之细分：`实时联网` / `本地缓存` / `内置知识库` / `离线兜底`。
 
 ### 2.4 离线优先
 
 - 游戏图标优先取 **Steam 本地封面缓存**，其次 exe 内嵌图标，最后才走 CDN。
 - 资源目录无网时走 `offlineCatalog.ts` 内置数据。
 - **内置知识库随包分发**（`resources/data/`，未打进 asar，可热替换）：
-  存档路径库 6613 款、游戏别名 142 条、修改器/MOD 元数据 8943 条。开箱即用，不需要联网初始化。
+  存档路径库 6613 款、游戏别名 6485 条、修改器/MOD 元数据 8943 条。开箱即用，不需要联网初始化。
 - 存档路径探测只读本机目录，不依赖任何在线库。
 
-**知识库兜底优先级**（逐级下降，界面永不空白）：
+**别名表是检索质量的关键。** 知识库里的游戏名一律是中文正式名（如「星露谷物语」），
+而用户可能输入英文名或俗称（`Stardew Valley` / `大表哥2` / `MC` / `老头环`）。
+检索前先用 `expandAlias()` 把输入展开成候选名集合（支持 2 跳，防环），再拿候选名去查名称索引：
 
 ```
-用户配置的在线数据源
-  └─ 失败 ↓
-本地检索缓存（TTL 内）
-  └─ 失败 ↓
-内置修改器/MOD 知识库（8943 条，按关键词命中排序）
-  └─ 无命中 ↓
-演示目录（offlineCatalog，5 条）
+Stardew Valley  →  [Stardew Valley, 星露谷物语]
+大表哥2          →  [大表哥2, 荒野大镖客2]
+老头环           →  [老头环, 艾尔登法环]
 ```
+
+6485 条别名有两个来源：参考项目人工维护的俗称表（14 条），以及**从自带数据反向抽取**——
+`save-paths.json` 的 `title` 字段格式为「中文名/English Name/备注」，按 `/` 切段即可得到中英对照
+（如 `星露谷物语/Stardew Valley/支持网络联机`），实测扩充出 6280 条。
 
 ### 2.5 合规边界：知识库只存元数据
 
@@ -105,10 +136,21 @@
 | `fileName` | 恒空串 | 不指向任何可下载对象 |
 | `homepage` | 来源帖子页 | 用户自行在浏览器查看 |
 | `linkKinds` | 仅分类名（如「百度网盘」） | 保留信息量，不携带链接 |
+| `description` | **链接/口令已替换为「［见原帖］」** | 见下方说明 |
 | `status` | 恒「待核实」 | 未经本项目核验 |
 | `risk` | 修改器「中」/ MOD「低」 | 内存修改类工具默认更高风险 |
 
-该约束由 `npm run verify:data` 强制校验 —— 一旦数据集里出现 `downloadUrl` 或 `fileName`，校验立即失败。
+> **为什么 `description` 也要洗**：初版只清掉了结构化的 `links[]` 数组，
+> `downloadUrl` / `fileName` 也确实恒为空串 —— 校验一路绿灯，声明看起来完美。
+> 但正文（`content` → `description`）里**原样贴着网盘链接**：实测 8943 条中
+> **8624 条（96%）** 中招，其中 7825 条 `pan.xunlei.com`、1326 条 `pan.baidu.com`。
+> 这只检查字段、不看正文的做法，等于给自己开了一张**假的合规证明**。
+>
+> 现在构建期统一做 `sanitize_links()`：清洗 URL、裸网盘域名、网盘口令（`/~xxxx~/`）、
+> 提取码，统一替换为占位符 `［见原帖］`，共清除 **13748 处**，残留 0。
+
+**该约束由 `npm run verify:data` 强制校验**：一旦数据集里出现 `downloadUrl`、`fileName`，
+或 `description` 里残留任何 http(s) 链接 / 裸网盘域名 / 网盘口令 / 提取码，校验立即失败。
 
 ### 2.6 不做事清单（立项排除，等于设计约束）
 
@@ -216,12 +258,15 @@ PC游戏资源服务工具/
 │  ├─ resources/
 │  │  ├─ data/                  ★ 内置知识库（随包分发，离线可用）
 │  │  │  ├─ save-paths.json     存档路径库：6613 款 × 15042 条
-│  │  │  ├─ name-aliases.json   游戏别名表：142 条
+│  │  │  ├─ name-aliases.json   游戏别名表：6485 条（中英对照 + 玩家俗称）
 │  │  │  └─ trainers.json       修改器/MOD 元数据：8943 条（无下载直链）
 │  │  └─ tools/                 随包解压工具（二进制不入库，见 §7.3）
 │  ├─ scripts/
 │  │  ├─ verify-deps.cjs        依赖完整性自检（还原被误改名的包文件）
-│  │  └─ verify-data.cjs        ★ 数据与契约校验（含 normKey 双实现一致性）
+│  │  ├─ verify-data.cjs        ★ 数据与契约校验（含 normKey 双实现一致性、正文无直链）
+│  │  ├─ verify-search.cjs      ★ 检索链路回归测试（直接加载 dist-electron 产物）
+│  │  ├─ electron-loader.mjs    ESM 加载钩子：把 electron 解析到桩模块
+│  │  └─ electron-shim.mjs      Electron 桩（仅测试用）
 │  ├─ package.json / package-lock.json
 │  ├─ tsconfig.json / tsconfig.electron.json / vite.config.ts
 │  └─ THIRD_PARTY_NOTICES.md    第三方声明（唯一维护文件）
@@ -588,13 +633,19 @@ npm run dev
 # 3) 类型检查
 npm run typecheck          # vue-tsc --noEmit + tsc -p tsconfig.electron.json --noEmit
 
-# 4) 数据与契约校验（含 normKey 双实现一致性）
+# 4) 数据与契约校验（含 normKey 双实现一致性、正文无直链）
 npm run verify:data
 
-# 5) 仅构建产物
+# 5) 检索链路回归测试（需先 npm run build）
+npm run verify:search
+
+# 6) 一次跑齐全部校验
+npm run verify             # verify:deps + verify:data + verify:search
+
+# 7) 仅构建产物
 npm run build
 
-# 6) 打 Windows 便携版（输出到 客户端源码/release）
+# 8) 打 Windows 便携版（输出到 客户端源码/release）
 npm run package:win
 ```
 
@@ -620,6 +671,7 @@ npm run package:win
 | 0.5.0 | 开源数据源接入 | **62/62 通过**；真实联网冒烟 2/2 源可用（GameBanana 11 条 / GitHub 30 条） |
 | 0.6.0 | 游戏库修复与图标 | **46/46 通过**；Steam 联网冒烟 3/3 PASS；4 个真实游戏目录主程序识别全中 |
 | 0.7.0 | 内置知识库接入 | **`npm run verify:data` 6/6 通过**；6613 款存档路径 + 142 别名 + 8943 条修改器元数据随包分发；`normKey` 双实现一致性通过（18 条语料） |
+| 0.7.1 | 检索链路修复 | **`verify:data` 6/6 + `verify:search` 9/9 通过**；搜「星露谷物语」0 条 → **377 条**（前 6 条游戏名全部精确匹配）；别名表 142 → **6485 条**，英文名 `Stardew Valley` 0 条 → 12 条；知识库正文清除下载链接 **13748 处**、残留 0 |
 
 每轮均执行 `vue-tsc --noEmit` 与 `tsc -p tsconfig.electron.json --noEmit`，并以「受控启动 + 数据目录落盘」判定运行期可用性。
 
@@ -629,10 +681,30 @@ npm run package:win
 | --- | --- | --- |
 | A1 | `save-paths.json` 结构 | ≥6000 款、≥14000 条路径、`bySteamId` 无悬空索引 |
 | A2 | 占位符白名单 | 全部路径的 `ph[]` 都在解析器支持列表内（漏一个就会残留 `<xxx>` 字面量） |
-| A3 | `name-aliases.json` 结构 | ≥100 条、无自指、无空值 |
-| A4 | `trainers.json` 结构 | ≥8000 条；**`downloadUrl` / `fileName` 必须全空**（合规红线）；`homepage` 必须是 http(s) |
+| A3 | `name-aliases.json` 结构 | ≥3000 条、无自指、无空值；**关键中英对照必须存在**（`Stardew Valley` / `Terraria` / `大表哥2` / `MC`） |
+| A4 | `trainers.json` 结构 | ≥8000 条；**`downloadUrl` / `fileName` 必须全空**（合规红线）；**`description` 不得残留 http(s) 链接、裸网盘域名、网盘口令、提取码**；`homepage` 必须是 http(s) |
 | B | `normKey` 双实现一致 | 符号表字面量逐字符相同 + 18 条语料两边输出相同 + CJK 保留/符号剥离性质成立 |
 | C | 占位符解析 | 最长优先替换正确（`<winLocalAppDataLow>` 不被 `<winLocalAppData>` 截断）、`<storeUserId>` 保留为通配符 |
+
+### 8.2 `verify:search` 校验项
+
+检索链路是「改一行、行为全变」的典型，单靠 `verify:data`（只看数据）守不住，因此单独有回归测试。
+
+实现上**直接加载 `dist-electron/` 编译产物**，不重新实现一遍检索逻辑 ——
+复刻一份副本来测，那份副本永远是对的，等于测了个假的。产物是 ESM 且
+`import { app } from 'electron'`，故通过 `scripts/electron-loader.mjs`（`node:module`
+的 `register` 钩子）把 `electron` 解析到桩模块 `electron-shim.mjs`。
+
+| # | 校验 | 通过标准 |
+| --- | --- | --- |
+| S1 | 知识库作为一等数据源并入 | 搜「星露谷物语」> 100 条；首屏含知识库条目；`trainer-lib` 状态上报命中数 |
+| S2 | 排序不倒挂 | 前 6 条 `gameName` 全部精确等于关键词（「关于某游戏的项目」不得排在「某游戏的资源」之前） |
+| S3 | 别名展开 | 英文名 / 俗称 → 中文正式名（含 2 跳） |
+| S4 | 英文名检索命中 | 搜 `Stardew Valley` 能命中 星露谷物语 条目 |
+| S5 | 不存在的关键词 | 返回 0 条知识库条目（不拿无关结果凑数） |
+| S6 | 无关键词不铺全库 | 知识库条目 ≤ 400（避免首屏铺 8943 条） |
+| S7 | 多游戏泛化 | 泰拉瑞亚 / 恐怖黎明 / 我的世界 均 > 0 条（确认不是只对星露谷打补丁） |
+| S8 | 大条目数游戏不被截断 | 赛博朋克2077 ≥719、上古卷轴5 ≥500、模拟人生4 ≥394、星露谷物语 ≥348（early 版本的 300 上限会砍掉一半以上，且砍的是「文件顺序靠后」的条目） |
 
 ---
 
@@ -643,7 +715,7 @@ npm run package:win
 - 仅面向单机、本地文件与可追溯资源场景。
 - **不提供**联网游戏辅助、反作弊规避、DRM 绕过、账号体系规避与破解分发。
 - 客户端不内置任何修改器本体，只做资源目录、下载与本地管理。
-- **内置知识库只存元数据**：修改器/MOD 条目的 `downloadUrl` 与 `fileName` 恒为空，只保留来源帖地址与网盘平台分类；该约束由 `npm run verify:data` 强制。
+- **内置知识库只存元数据**：修改器/MOD 条目的 `downloadUrl` 与 `fileName` 恒为空，`description` 正文中的下载链接/提取码已统一替换为「［见原帖］」，只保留来源帖地址与网盘平台分类；该约束由 `npm run verify:data` 强制。
 - 文件写入仅限用户显式配置的路径与工具自身数据目录，**不扫描无关目录**。
 - 破坏性操作（恢复存档、安装 / 卸载 MOD）均保留还原点或部署记录。
 
@@ -676,9 +748,11 @@ npm run package:win
 
 **Pluggable data sources.** Online search is not bound to any single backend. Sources are a configuration list of four kinds — `json`, `rss`, `gamebanana`, `github` — fetched concurrently with per-source timeouts and full error isolation. A four-level degradation chain (live network → local TTL cache → bundled trainer metadata library → demo catalog) guarantees the UI is never empty.
 
-**Bundled knowledge base.** `客户端源码/resources/data/` ships outside the asar and is hot-swappable: `save-paths.json` (6,613 games × 15,042 save paths, converted from the Ludusavi manifest, MIT), `name-aliases.json` (142 aliases), and `trainers.json` (8,943 trainer/MOD metadata records). Save-path lookup joins on Steam appid — a zero-fuzzy-match join that eliminates same-name mismatches at the root.
+**Bundled knowledge base.** `客户端源码/resources/data/` ships outside the asar and is hot-swappable: `save-paths.json` (6,613 games × 15,042 save paths, converted from the Ludusavi manifest, MIT), `name-aliases.json` (6,485 aliases — Chinese/English pairs plus player slang, derived from the bundled titles and the reference project), and `trainers.json` (8,943 trainer/MOD metadata records). Save-path lookup joins on Steam appid — a zero-fuzzy-match join that eliminates same-name mismatches at the root.
 
-**Metadata only.** The bundled trainer/MOD library is an offline metadata snapshot with all download links stripped at build time: `downloadUrl` and `fileName` are always empty strings, `homepage` points to the source post, and `linkKinds` keeps only the platform category (e.g. "百度网盘"). Enforced by `npm run verify:data`.
+**Aliases are a first-class source, not a nicety.** The library stores Chinese canonical names ("星露谷物语") while users type English names or slang ("Stardew Valley", "大表哥2", "MC"). Queries are expanded through the alias table (two hops, cycle-guarded) before hitting the name index — without this step, English-name searches necessarily return zero.
+
+**Metadata only.** The bundled trainer/MOD library is an offline metadata snapshot with all download links stripped at build time: `downloadUrl` and `fileName` are always empty strings, `homepage` points to the source post, `linkKinds` keeps only the platform category (e.g. "百度网盘"), and any download URL, access code, or netdisk token inside `description` is replaced with the placeholder "［见原帖］". Enforced by `npm run verify:data`.
 
 **Offline-first.** Game icons prefer the local Steam library cache, then the embedded exe icon, and only then the Steam CDN. Save-path detection scans local directories only.
 
@@ -691,13 +765,15 @@ cd 客户端源码
 npm install --registry=https://registry.npmmirror.com
 npm run verify:deps
 npm run typecheck
-npm run verify:data
+npm run verify             # deps + data + search
 npm run build
 npm run package:win
 ```
 
 A portable `*.exe` is emitted to `客户端源码/release`. `resources/tools/7za.exe` is intentionally not committed — see §7.3.
 
+Note: `verify:search` loads the compiled `dist-electron/` output, so run `npm run build` (or at least `tsc -p tsconfig.electron.json`) first. `npm run verify` does this for `verify:data` but not for `verify:search`'s prerequisites — the script will tell you if the artifacts are missing.
+
 ---
 
-*文档版本：0.7.0 · 最近更新：2026-10-08*
+*文档版本：0.7.1 · 最近更新：2026-10-08*

@@ -194,7 +194,14 @@ export interface SearchResult {
   total: number
   page: number
   pageSize: number
-  origin: 'online' | 'cache' | 'empty'
+  /**
+   * 结果主要来源：
+   * - online    在线源实时返回
+   * - cache     在线源不可用，用本地聚合缓存
+   * - knowledge 未联网 / 在线源无结果，由内置元数据知识库供给
+   * - empty     连知识库都没命中，走了 5 条演示数据兜底
+   */
+  origin: 'online' | 'cache' | 'knowledge' | 'empty'
   cachedAt: string
   tookMs: number
   statuses: SourceStatus[]

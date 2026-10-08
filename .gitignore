@@ -49,3 +49,8 @@ Desktop.ini
 /data/
 客户端源码/data/
 !客户端源码/resources/data/
+
+# 开发态运行时配置（应用启动时在 cwd 落盘，含 lastTestedAt / 缓存状态，非源码）
+# 正常打包运行时配置在 %APPDATA%\PCGameResourceHub\data，不会污染仓库；
+# 但 `npm run dev` 或从 客户端源码/ 直接跑会让它出现在这里。
+客户端源码/config.json

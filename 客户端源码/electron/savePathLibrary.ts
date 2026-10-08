@@ -79,22 +79,45 @@ export function resetDirCache(): void {
 let cache: SavePathLibrary | null = null
 let cacheFile = ''
 
-/** 数据文件位置：打包后在 resources/data 下，开发态在源码 resources/data。 */
+/**
+ * 数据文件位置。
+ *
+ * 候选顺序（逐个探测存在性，不预设成败）：
+ *   打包态：process.resourcesPath/data  →  app.asar.unpacked/resources/data
+ *   开发态：app.getAppPath()/resources/data  →  process.cwd()/resources/data
+ *
+ * 不写成 `app.isPackaged ? [单个路径] : [...]` —— 打包态只试一个路径太脆弱，
+ * 且最后 `return candidates[0]` 会返回一个未验证的路径。
+ */
 function dataFile(): string {
   if (cacheFile) return cacheFile
-  const candidates = app.isPackaged
-    ? [path.join(process.resourcesPath, 'data', 'save-paths.json')]
-    : [
-        path.join(app.getAppPath(), 'resources', 'data', 'save-paths.json'),
-        path.join(process.cwd(), 'resources', 'data', 'save-paths.json'),
-      ]
+  const candidates: string[] = []
+  try {
+    if (app?.isPackaged) candidates.push(path.join(process.resourcesPath, 'data', 'save-paths.json'))
+  } catch {
+    /* app 不可用时忽略 */
+  }
+  try {
+    candidates.push(path.join(app.getAppPath(), 'resources', 'data', 'save-paths.json'))
+  } catch {
+    /* 同上 */
+  }
+  candidates.push(path.join(process.cwd(), 'resources', 'data', 'save-paths.json'))
+  try {
+    if (app?.isPackaged) {
+      candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'data', 'save-paths.json'))
+    }
+  } catch {
+    /* 同上 */
+  }
+
   for (const file of candidates) {
-    if (fs.existsSync(file)) {
+    if (file && fs.existsSync(file)) {
       cacheFile = file
       return file
     }
   }
-  cacheFile = candidates[0]
+  cacheFile = ''
   return cacheFile
 }
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { app } from 'electron'
 
 const PLACEHOLDERS: Array<[string, string]> = [
   ['%USERPROFILE%', process.env.USERPROFILE ?? ''],
@@ -134,6 +135,107 @@ export function normKey(value: string): string {
     .toLowerCase()
     .replace(/[\s\u3000]+/g, '')
     .replace(NORM_SYMBOLS, '')
+}
+
+// ---------------------------------------------------------------------------
+// 别名表（别名 → 正式名）
+// ---------------------------------------------------------------------------
+//
+// 数据文件：resources/data/name-aliases.json（随包分发）
+//   schema/1 + aliases: { "<别名或英文名>": "<正式名>" }
+//   来源：game-aggregator 的 cn-names.json（由 steam-store-api 学习）+ aliases.json
+//
+// 用途：把用户输入的俗称/英文名映射到知识库里用的正式中文名。
+//   例：「Stardew Valley」→「星露谷物语」，「大表哥2」→「荒野大镖客2」，
+//       「泰拉」→「泰拉瑞亚」，「MC」→「我的世界」。
+//   不接这张表的话，输入英文名在只收录中文名的知识库里必然 0 命中。
+//
+// 键值都以 normKey 归一化后存储，查询时同样归一化，避免全角/大小写差异。
+
+let aliasMap: Map<string, string> | null = null
+
+/** 数据目录候选（与 trainerLibrary.dataDir 同策略，但不依赖 app 是否打包）。 */
+function aliasDataFile(): string {
+  const candidates: string[] = []
+  try {
+    if (app?.isPackaged) candidates.push(path.join(process.resourcesPath, 'data', 'name-aliases.json'))
+  } catch {
+    /* app 不可用（单元测试）时忽略 */
+  }
+  try {
+    const appPath = app?.getAppPath?.()
+    if (appPath) candidates.push(path.join(appPath, 'resources', 'data', 'name-aliases.json'))
+  } catch {
+    /* 同上 */
+  }
+  candidates.push(path.join(process.cwd(), 'resources', 'data', 'name-aliases.json'))
+  try {
+    if (app?.isPackaged) {
+      candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'data', 'name-aliases.json'))
+    }
+  } catch {
+    /* 同上 */
+  }
+  for (const file of candidates) {
+    if (file && fs.existsSync(file)) return file
+  }
+  return ''
+}
+
+/** 载入别名表（带缓存）。文件缺失或损坏时返回空表，不抛异常。 */
+function loadAliases(): Map<string, string> {
+  if (aliasMap) return aliasMap
+  const map = new Map<string, string>()
+  const file = aliasDataFile()
+  if (file) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { aliases?: Record<string, string> }
+      for (const [alias, official] of Object.entries(parsed.aliases ?? {})) {
+        const key = normKey(alias)
+        if (key.length < 2) continue
+        if (!map.has(key)) map.set(key, String(official))
+      }
+    } catch {
+      /* 损坏时保留空表 */
+    }
+  }
+  aliasMap = map
+  return map
+}
+
+/**
+ * 把用户的输入展开成候选名称列表（含原始输入本身）。
+ *
+ * 返回顺序：原始输入 → 命中的正式名 → 正式名可能再作为别名命中的下一跳（最多 2 跳，防环）。
+ * 例：expandAlias('大表哥2') → ['大表哥2', '荒野大镖客2']
+ */
+export function expandAlias(value: string): string[] {
+  const raw = String(value ?? '').trim()
+  if (!raw) return []
+  const out: string[] = [raw]
+  const seen = new Set<string>([normKey(raw)])
+  let cursor = raw
+  for (let hop = 0; hop < 2; hop += 1) {
+    const official = loadAliases().get(normKey(cursor))
+    if (!official) break
+    const key = normKey(official)
+    if (seen.has(key)) break
+    seen.add(key)
+    out.push(official)
+    cursor = official
+  }
+  return out
+}
+
+/** 别名表概况，供界面展示「已载入 N 条别名」。 */
+export function aliasInfo(): { available: boolean; total: number } {
+  const map = loadAliases()
+  return { available: map.size > 0, total: map.size }
+}
+
+/** 清别名表缓存（测试用）。 */
+export function resetAliasCache(): void {
+  aliasMap = null
 }
 
 export function formatBytes(bytes: number): string {

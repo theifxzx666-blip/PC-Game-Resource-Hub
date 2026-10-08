@@ -116,14 +116,29 @@ check('name-aliases.json 结构', () => {
   const data = readJson(file);
   assert(data.aliases && typeof data.aliases === 'object' && !Array.isArray(data.aliases), 'aliases 不是对象');
   const keys = Object.keys(data.aliases);
-  assert(keys.length >= 100, `别名数异常偏少：${keys.length}`);
+  // 阈值说明：schema 1 只有 142 条（仅参考项目的 3A 大作），
+  // schema 2 起从 save-paths/trainers 的双语标题扩充到 6000+，
+  // 覆盖了知识库里真正高频的中小体量游戏。低于 3000 说明扩充没跑。
+  assert(keys.length >= 3000, `别名数异常偏少：${keys.length}（schema 2 起应 >= 3000）`);
   const bad = [];
   for (const [k, v] of Object.entries(data.aliases)) {
     if (!k || typeof v !== 'string' || !v.trim()) bad.push(k);
     if (k === v) bad.push(`${k}（自指）`);
   }
   assert(bad.length === 0, `脏别名 ${bad.length} 个：${bad.slice(0, 5).join(', ')}`);
-  return `${keys.length} 条别名`;
+
+  // ★ 实测坑：schema 1 里没有「Stardew Valley」，导致英文名搜索 0 命中。
+  //   这条断言把「关键中英对照必须存在」固化下来，防止扩充逻辑被改回去。
+  const REQUIRED = [
+    ['Stardew Valley', '星露谷物语'],
+    ['Terraria', '泰拉瑞亚'],
+    ['大表哥2', '荒野大镖客2'],
+    ['MC', '我的世界'],
+  ];
+  const missing = REQUIRED.filter(([alias]) => !data.aliases[alias]).map(([alias]) => alias);
+  assert(missing.length === 0, `缺少关键别名：${missing.join(', ')}`);
+
+  return `${keys.length} 条别名（含关键中英对照）`;
 });
 
 check('trainers.json 结构', () => {
@@ -139,6 +154,19 @@ check('trainers.json 结构', () => {
   const problems = [];
   let modifier = 0;
   let withHomepage = 0;
+  // 描述里残留的下载链接（见下方「自欺式合规」说明）
+  const descLeaks = [];
+
+  // ★ 描述字段的链接检测。
+  //   只查 downloadUrl 字段是不够的：初版数据集 downloadUrl 全为空串，
+  //   校验一路绿灯，但 description 里原样贴着 pan.xunlei.com / pan.baidu.com 直链，
+  //   实测 8943 条中 8624 条（96%）中招 —— 合规声明成了自欺。
+  //   现在把「描述不得含可点击链接」也固化成断言。
+  const URL_RE = /https?:\/\/[^\s，。、；：）)】\]"']+/gi;
+  const BARE_PAN_RE = /\b(?:pan|yun|cloud)\.\w+\.(?:com|cn|net)/i;
+  // 网盘口令（夸克 /~xxxx~/）与提取码（提取码: abcd）也不能留
+  const TOKEN_RE = /~[0-9A-Za-z]{6,}~/;
+  const ACCESS_CODE_RE = /(?:提取码|访问码|提取密码|访问密码)\s*[:：]\s*[A-Za-z0-9]{4,}/;
 
   for (const r of data.resources) {
     if (!r || typeof r !== 'object') {
@@ -161,11 +189,20 @@ check('trainers.json 结构', () => {
     for (const lk of r.linkKinds || []) {
       if (/^https?:|:\/\//i.test(lk)) problems.push(`${r.id} linkKinds 混入了链接：${lk}`);
     }
+    // ★ 描述里不得残留可点击链接 / 网盘口令 / 提取码
+    const desc = String(r.description || '');
+    if (URL_RE.test(desc) || BARE_PAN_RE.test(desc) || TOKEN_RE.test(desc) || ACCESS_CODE_RE.test(desc)) {
+      descLeaks.push(r.id);
+    }
   }
 
   assert(problems.length === 0, `${problems.length} 项问题：${problems.slice(0, 5).join('; ')}`);
   assert(withHomepage === data.resources.length, `有 ${data.resources.length - withHomepage} 条缺来源页地址`);
-  return `${data.resources.length} 条（${modifier} 修改器），全部为元数据、无下载直链`;
+  assert(
+    descLeaks.length === 0,
+    `${descLeaks.length} 条描述的正文里残留下载链接/口令（合规红线，例：${descLeaks.slice(0, 3).join(', ')}）`,
+  );
+  return `${data.resources.length} 条（${modifier} 修改器），全部为元数据、正文无直链`;
 });
 
 // ---------------------------------------------------------------------------

@@ -43,13 +43,23 @@ const statusOptions = computed(() => ['全部', ...(facets.value.statuses.length
 const riskOptions = computed(() => ['全部', ...(facets.value.risks.length ? facets.value.risks : (['低', '中'] as ResourceRisk[]))])
 
 const originLabel = computed(() => {
-  const map = { online: '实时联网', cache: '本地缓存', empty: '离线兜底' } as const
-  return map[result.value.origin]
+  const map = {
+    online: '实时联网',
+    cache: '本地缓存',
+    knowledge: '内置知识库',
+    empty: '离线兜底',
+  } as const
+  return map[result.value.origin] ?? '离线兜底'
 })
 
 const originType = computed(() => {
-  const map = { online: 'success', cache: 'warning', empty: 'info' } as const
-  return map[result.value.origin]
+  const map = {
+    online: 'success',
+    cache: 'warning',
+    knowledge: 'primary',
+    empty: 'info',
+  } as const
+  return map[result.value.origin] ?? 'info'
 })
 
 const failedSources = computed(() => result.value.statuses.filter((item) => !item.ok))

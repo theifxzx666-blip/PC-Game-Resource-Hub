@@ -63,8 +63,15 @@ let nameIndex: Map<string, TrainerRecord[]> | null = null
 
 /**
  * 数据目录解析。
- * 打包后走 process.resourcesPath/data（electron-builder extraResources），
- * 开发态走源码目录 resources/data。两处都找不到就返回空库（不是错误）。
+ *
+ * 候选顺序：
+ *   1. 打包后 process.resourcesPath/data（electron-builder extraResources）
+ *   2. 开发态 app.getAppPath()/resources/data（app 路径最可靠）
+ *   3. 开发态 process.cwd()/resources/data（兜底）
+ *
+ * 逐个探测 trainers.json 是否真的存在；都找不到返回空串（不是错误）。
+ * 注意不能直接 `return candidates[0]` —— 开发态下 isPackaged 为 false 时
+ * candidates[0] 是未验证的第一个候选，可能并不存在。
  */
 function dataDir(): string {
   const candidates: string[] = []
@@ -73,12 +80,24 @@ function dataDir(): string {
   } catch {
     /* app 不可用（测试环境）时忽略 */
   }
+  try {
+    const appPath = app?.getAppPath?.()
+    if (appPath) candidates.push(path.join(appPath, 'resources', 'data'))
+  } catch {
+    /* 同上 */
+  }
   candidates.push(path.join(process.cwd(), 'resources', 'data'))
-  candidates.push(path.join(app?.getAppPath?.() ?? '', 'resources', 'data'))
+  // 打包后 asar 内也放一份兜底（若 extraResources 未生效时不至于完全没数据）
+  try {
+    if (app?.isPackaged) candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'data'))
+  } catch {
+    /* 同上 */
+  }
+
   for (const dir of candidates) {
     if (dir && fs.existsSync(path.join(dir, 'trainers.json'))) return dir
   }
-  return candidates[0] ?? ''
+  return ''
 }
 
 /** 载入数据集（带缓存）。文件缺失或损坏时返回空库，不抛异常。 */

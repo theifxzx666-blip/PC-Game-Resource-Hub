@@ -32,7 +32,8 @@ import {
   trainersAvailable,
   trainersForGame,
 } from './trainerLibrary.js'
-import { nowText, uid, normKey } from './util.js'
+import type { TrainerRecord } from './trainerLibrary.js'
+import { nowText, uid, normKey, expandAlias } from './util.js'
 import type {
   CatalogResource,
   OnlineResource,
@@ -615,38 +616,99 @@ function offlineAsOnline(): OnlineResource[] {
  * 与 offlineCatalog 的区别：offlineCatalog 是 5 条演示数据，
  * 这是 8943 条真实元数据（机地社区帖离线快照）。
  * 只走元数据：downloadUrl 恒空，homepage 指向来源帖。
+ *
+ * ★ 截断顺序很关键。
+ *
+ * `searchTrainers` 是按**数据集文件顺序**扫到 limit 条就 break 的，
+ * 先截断再交给 relevance 排序 —— 这样一旦某个游戏有几百条条目
+ * （实测「星露谷物语」348 条、「赛博朋克2077」719 条，
+ * 散落在文件各处），排在文件后面的高相关条目（例如标题就叫
+ * 「星露谷物语 中文版」的那种）可能在截断时就丢了，根本没机会参与打分。
+ *
+ * 这里改成：
+ *   1. 先用别名表把输入展开成候选名（「Stardew Valley」→「星露谷物语」）；
+ *   2. 按候选名走 nameIndex 把整款游戏的条目整体捞出（O(1)，不截断）；
+ *   3. 再用关键词补扫全库（上限放宽到 SCAN_LIMIT）；
+ *   4. 合并去重后才交给 relevance 打分。
+ *
+ * 于是截断截的是「低相关」的尾部，而不是「文件顺序靠后」的条目。
  */
-function trainersAsOnline(limit = 400): OnlineResource[] {
+
+/**
+ * 模糊补扫上限。
+ * 实测单游戏最大条目数 719（赛博朋克2077），取 1500 有充分余量；
+ * 再大没有意义 —— 全网 8943 条，一个关键词能命中的量级就是这个数。
+ */
+const SCAN_LIMIT = 1500
+
+/**
+ * 单次检索最多带回的知识库条目数。
+ *
+ * 这是**硬上限**，防的是病态输入（比如关键词是「a」这种单字，
+ * 补扫可能命中数千条）把整包数据一次性塞进渲染层。
+ * 正常情况下「整款游戏的条目」远小于此值：
+ *   精确命中走 nameIndex 拿到的是该游戏全部条目（最大 719），
+ *   加补扫后实测最大约 780（赛博朋克2077），都在限内。
+ */
+const LIBRARY_LIMIT = 1200
+
+function libraryAsOnline(keyword: string, limit = LIBRARY_LIMIT): OnlineResource[] {
   if (!trainersAvailable()) return []
-  return allTrainers()
-    .slice(0, limit)
-    .map((record) => ({
-      ...record,
-      sourceIds: ['trainer-lib'],
-      sourceNames: ['修改器知识库'],
-      multiSource: false,
-    }))
+
+  const kw = (keyword ?? '').trim()
+  if (!kw) {
+    // 无关键词：取前 N 条，「刚进页面先给点东西看」。不查库避免铺 8943 条。
+    return allTrainers()
+      .slice(0, Math.min(limit, 400))
+      .map(toLibraryResource)
+  }
+
+  // 0) 别名展开：输入可能是俗称 / 英文名，知识库里只收中文正式名。
+  //    例：「Stardew Valley」/「大表哥2」/「泰拉」/「MC」。
+  const candidates = expandAlias(kw)
+
+  // 1) 候选名精确命中：整款游戏的条目一次性拿到（不截断）。
+  const matched: TrainerRecord[] = []
+  const seen = new Set<string>()
+  for (const candidate of candidates) {
+    for (const record of trainersForGame(candidate)) {
+      if (seen.has(record.id)) continue
+      seen.add(record.id)
+      matched.push(record)
+    }
+  }
+
+  // 2) 关键词补扫：原文与展开名都扫，覆盖「描述/标签里提到但对不上游戏名」的情况。
+  //    精确命中已占额度时不再补扫，避免病态关键词把上限吃满。
+  for (const candidate of candidates) {
+    if (matched.length >= limit) break
+    for (const record of searchTrainers(candidate, [], SCAN_LIMIT)) {
+      if (matched.length >= limit) break
+      if (seen.has(record.id)) continue
+      seen.add(record.id)
+      matched.push(record)
+    }
+  }
+
+  return matched.map(toLibraryResource)
+}
+
+/** TrainerRecord → OnlineResource（补溯源信息）。 */
+function toLibraryResource(record: TrainerRecord): OnlineResource {
+  return {
+    ...record,
+    sourceIds: ['trainer-lib'],
+    sourceNames: ['修改器知识库'],
+    multiSource: false,
+  }
 }
 
 /**
- * 离线兜底：优先给与关键词匹配的知识库条目，
- * 关键词为空或知识库未命中时退回前 N 条 + 演示目录。
- * 目的是「界面永远不空白」，且尽量给相关结果而不是固定 5 条。
+ * 离线兜底：关键词优先命中知识库，无关键词给前 N 条，最后才退演示目录。
+ * 目的是「界面永远不空白」。
  */
 function fallbackOffline(keyword: string): OnlineResource[] {
-  const kw = (keyword ?? '').trim()
-  if (kw && trainersAvailable()) {
-    const hits = searchTrainers(kw, [], 200)
-    if (hits.length > 0) {
-      return hits.map((record) => ({
-        ...record,
-        sourceIds: ['trainer-lib'],
-        sourceNames: ['修改器知识库'],
-        multiSource: false,
-      }))
-    }
-  }
-  const bulk = trainersAsOnline()
+  const bulk = libraryAsOnline(keyword)
   if (bulk.length > 0) return bulk
   return offlineAsOnline()
 }
@@ -723,17 +785,56 @@ function buildFacets(items: OnlineResource[]): SearchFacets {
   }
 }
 
-/** 相关性打分：标题命中权重最高，其次游戏名/别名，再次标签与来源。 */
+/**
+ * 相关性打分。
+ *
+ * 权重设计的关键：**「游戏名精确命中」必须压过「标题里恰好含这个词」**。
+ *
+ * 反例（实测）：搜「星露谷物语」时，GitHub 上「星露谷物语复刻版」「MOD 安装器」
+ * 这类项目的**仓库名/描述里含「星露谷物语」**，按旧的标题权重（60~120）会排到
+ * 知识库里 348 条真正的星露谷 MOD（游戏名命中仅 40 分）前面 —— 用户想找的是
+ * 星露谷的资源，不是关于星露谷的项目。
+ *
+ * 新权重：
+ *   游戏名完全相等         200  ← 最强信号：这条资源就是这款游戏的
+ *   别名完全相等           180
+ *   游戏名以关键词开头      120
+ *   游戏名包含关键词        100
+ *   标题完全相等            90
+ *   标题以关键词开头        70
+ *   标题包含关键词          50
+ *
+ * ★ 别名展开：关键词可能是俗称/英文名（「Stardew Valley」「大表哥2」），
+ *   而资源的 gameName 用的是中文正式名。此时直接比 normKey 全是 0 分，
+ *   必须先把关键词展开成候选名集合再比对，否则英文名搜索必然排不准。
+ *   展开后的正式名视为「同一款游戏」，给 200 分（与精确命中同级）。
+ */
 function relevance(item: OnlineResource, keyword: string): number {
   const kw = norm(keyword)
   if (!kw) return 0
   let score = 0
+
+  // 关键词 + 别名展开后的全部候选（都经过归一化）
+  const keys = expandAlias(keyword).map(norm).filter(Boolean)
+  const anyKey = (test: (key: string) => boolean): boolean => keys.some(test)
+
+  // 游戏名 / 别名：精确 > 前缀 > 包含
+  const name = norm(item.gameName)
+  if (name && anyKey((key) => name === key)) score += 200
+  else if (name && anyKey((key) => name.startsWith(key))) score += 120
+  else if (name && anyKey((key) => name.includes(key))) score += 100
+
+  const aliases = item.gameAliases.map(norm).filter(Boolean)
+  if (aliases.some((alias) => keys.includes(alias))) score += 180
+  else if (aliases.some((alias) => anyKey((key) => alias.startsWith(key)))) score += 110
+  else if (aliases.some((alias) => anyKey((key) => alias.includes(key)))) score += 90
+
+  // 标题：作为补充信号，权重低于游戏名精确命中
   const title = norm(item.title)
-  if (title === kw) score += 120
-  else if (title.startsWith(kw)) score += 80
-  else if (title.includes(kw)) score += 60
-  if (norm(item.gameName).includes(kw)) score += 40
-  if (item.gameAliases.some((alias) => norm(alias).includes(kw))) score += 32
+  if (title === kw) score += 90
+  else if (title.startsWith(kw)) score += 70
+  else if (title.includes(kw)) score += 50
+
   if (item.tags.some((tag) => norm(tag).includes(kw))) score += 20
   if (norm(item.source).includes(kw)) score += 12
   if (norm(item.description).includes(kw)) score += 10
@@ -746,6 +847,12 @@ function relevance(item: OnlineResource, keyword: string): number {
 function matches(item: OnlineResource, query: SearchQuery, libraryGameNames: Set<string>): boolean {
   const kw = norm(query.keyword ?? '')
   if (kw) {
+    // ★ 别名展开后再做 haystack 判定。
+    //   搜「Stardew Valley」时知识库条目的游戏名是「星露谷物语」，
+    //   只比对原文会全被过滤掉 —— 展开成候选名后才有命中机会。
+    const keys = expandAlias(query.keyword ?? '')
+      .map(norm)
+      .filter((key) => key.length >= 1)
     const haystack = [
       item.title,
       item.gameName,
@@ -760,7 +867,7 @@ function matches(item: OnlineResource, query: SearchQuery, libraryGameNames: Set
     ]
       .map(norm)
       .join(' ')
-    if (!haystack.includes(kw)) return false
+    if (!keys.some((key) => haystack.includes(key))) return false
   }
   if (query.kind && query.kind !== '全部' && item.kind !== query.kind) return false
   if (query.game && query.game !== '全部' && item.gameName !== query.game) return false
@@ -820,7 +927,6 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
 
   if (enabled.length === 0) {
     // 未配置任何数据源：用旧式单目录接口 + 内置知识库兜底，保证界面可用。
-    // 兜底优先级：在线单目录 > 修改器知识库（8943 条真实元数据）> 演示目录（5 条）。
     const single = await loadSingleCatalogAsOnline()
     pool = single.items.length > 0 ? single.items : fallbackOffline(keyword)
     statuses = single.statuses
@@ -880,8 +986,44 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
     }
   }
 
+  // ★ 内置知识库作为一等数据源并入，而不是等在线源全空才兜底。
+  //
+  // 之前的写法只在 pool.length === 0 时才会用到知识库，导致配了预置源
+  // （GameBanana / GitHub）后，搜「星露谷物语」只会在线源那堆
+  // 「复刻版 / MOD 安装器 / 类似星露谷的游戏」里过滤 —— 知识库里
+  // 348 条真正的星露谷 MOD 反而永远检索不到（实测 0 条结果）。
+  //
+  // 现在：有关键词就查库并合并（知识库条目 id 前缀 jidi-，与在线源不会撞键），
+  // 无关键词则不查库（避免首次进页面就把 8943 条全铺出来）。
+  const libItems = keyword ? libraryAsOnline(keyword) : []
+  if (libItems.length > 0) {
+    pool = pool.length > 0 ? mergeOnline([pool, libItems]) : libItems
+    statuses.push({
+      id: 'trainer-lib',
+      name: '修改器知识库',
+      kind: 'json',
+      enabled: true,
+      ok: true,
+      count: libItems.length,
+      elapsedMs: 0,
+      message: `内置离线知识库命中 ${libItems.length} 条（不联网）。`,
+      keywordRequired: false,
+    })
+  }
+
+  // 知识库条目并入后，若在线源一条都没成功、而池子里确实有知识库条目，
+  // 说明这次是「离线知识库供给」而不是「演示数据兜底」——
+  // 界面要能区分这两种，否则搜到 357 条真实资源却标「离线兜底」很误导。
+  const libCount = pool.filter((item) => item.sourceIds.includes('trainer-lib')).length
+
   if (pool.length === 0) pool = fallbackOffline(keyword)
-  const origin: SearchResult['origin'] = live ? 'online' : cachedAt ? 'cache' : 'empty'
+  const origin: SearchResult['origin'] = live
+    ? 'online'
+    : cachedAt
+      ? 'cache'
+      : libCount > 0
+        ? 'knowledge'
+        : 'empty'
 
   const libraryGameNames = new Set<string>()
   for (const game of store.games()) {
