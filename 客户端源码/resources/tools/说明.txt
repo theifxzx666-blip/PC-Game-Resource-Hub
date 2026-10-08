@@ -1,0 +1,9 @@
+﻿本目录用于存放随包分发的解压工具。
+
+7za.exe
+- 用途：解压用户导入的 zip / 7z 资源包（rar 需另装 7-Zip）。
+- 来源：从本机 electron-builder 缓存复制：
+F:\Codex\Supports\electron-builder-cache\7zip@1.0.0\7zip-win-x64-a34pt\bin\7za.exe
+- 许可：7-Zip 以 GNU LGPL + unRAR restriction 分发，详见 THIRD_PARTY_NOTICES.md。
+- 复制时间：
+2026-10-04 11:45:56

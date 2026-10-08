@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Git ignore rules / 忽略规则
+# 说明：本仓库只收录源码、文档与配置。依赖、构建产物、本机临时区一律不入库。
+# ---------------------------------------------------------------------------
+
+# 依赖目录 Dependencies
+node_modules/
+**/node_modules/
+
+# 构建产物 Build output
+客户端源码/dist/
+客户端源码/dist-electron/
+客户端源码/release/
+**/win-unpacked/
+**/*.blockmap
+**/*.nsis.7z
+
+# 可执行文件与安装包 Executables
+# 便携版单文件约 105 MB，超过 GitHub 单文件 100 MB 上限；7za.exe 为第三方二进制，
+# 授权范围尚未最终确认，故同样不入库。参见 README「获取与构建」一节。
+*.exe
+*.msi
+
+# 内部文档 Internal docs（含委托方信息 / 本机绝对路径，不入公开仓库）
+AGENTS.md
+正式文件/*立项简案*.docx
+正式文件/*副本*.docx
+
+# 本机临时区与日志 Local scratch & logs
+临时文件/
+日志/
+*.log
+*.err
+
+# 系统与编辑器杂项 OS / editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# 运行时数据目录（位于 %APPDATA%，仅作保险）
+data/

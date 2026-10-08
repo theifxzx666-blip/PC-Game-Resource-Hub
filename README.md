@@ -1,0 +1,510 @@
+# PC 游戏资源服务工具 · PC Game Resource Hub
+
+面向单机 PC 玩家的**本地优先（local-first）**游戏资源桌面工具：把「游戏库管理 / 存档备份恢复 / MOD 启停 / 资源检索下载」收敛到一个 Windows 客户端里，所有破坏性操作都可回退。
+
+> 当前版本 **0.6.0**（Electron 44 + Vue 3 + TypeScript）
+> 形态：Windows 便携版单文件 EXE（portable），免安装、绿色运行。
+> 数据目录：`%APPDATA%\PCGameResourceHub\data`
+
+---
+
+## Table of Contents
+
+- [一、项目概述](#一项目概述)
+- [二、设计思路](#二设计思路)
+- [三、技术框架](#三技术框架)
+- [四、仓库结构](#四仓库结构)
+- [五、功能模块](#五功能模块)
+- [六、技术方案细节](#六技术方案细节)
+- [七、获取与构建](#七获取与构建)
+- [八、验证记录](#八验证记录)
+- [九、合规边界与第三方声明](#九合规边界与第三方声明)
+- [Ten-minute Guide (English)](#ten-minute-guide-english)
+
+---
+
+## 一、项目概述
+
+### 1.1 要解决的问题
+
+玩家侧的周边工具长期是「一堆散装脚本 + 网盘链接」：存档备份靠手动复制、MOD 靠手抄说明、修改器/补丁靠论坛翻帖。本项目把这些动作做成一个**有账可查、可回退**的客户端。
+
+### 1.2 目标能力
+
+| 领域 | 能力 |
+| --- | --- |
+| Game Library | Steam 库自动扫描、手动添加、封面图标自动获取、按名称匹配 Steam 资料页 |
+| Save Manager | 备份 / 恢复 / 轮换 / 固定 / 导出导入，**存档路径自动定位**（探测 + 快照差分） |
+| Mod Manager | 多格式导入、安装计划预览、复制式安装、卸载、冲突检测、配置档案（Profile） |
+| Resource Center | 多数据源聚合检索、多维筛选、下载队列、本地导入、版本更新检查 |
+| Governance | 操作记录（最多 500 条）、破坏性操作保留还原点或部署记录 |
+
+### 1.3 交付形态
+
+- 渲染进程：Vue 3 单页应用，7 个视图（概览 / 游戏库 / 存档管理 / MOD 管理 / 资源中心 / 操作记录 / 设置）。
+- 主进程：文件系统、子进程解压、Steam 扫描、HTTP 下载与检索、JSON 持久化。
+- 无需任何服务端即可运行（内置离线兜底目录 + 开源公开数据源）。
+
+---
+
+## 二、设计思路
+
+五条主线，决定了后面所有技术选型。
+
+### 2.1 进程边界即权限边界
+
+渲染进程跑的是网页代码，**不开 `nodeIntegration`**，`contextIsolation: true`、`sandbox: true`。所有系统能力只能通过 `preload.cjs` 用 `contextBridge` 暴露的 `window.api` 调用，主进程侧统一做参数校验。
+
+结果：界面代码无法直接触碰文件系统，能力清单在 `preload.ts` 与 `ipc.ts` 中显式枚举，可审计。
+
+### 2.2 一切落盘，破坏性操作必有回退
+
+- 状态全部持久化到 JSON，重启不丢。
+- **恢复存档前强制自动备份**，"备份-恢复" 不是 "覆盖-丢档"。
+- MOD 安装前对将被覆盖的目标文件建立还原点（`mods/restore/...`），复制中途失败会回滚已复制内容。
+
+### 2.3 数据源可插拔，界面永不空白
+
+在线检索不绑死任何单一后端：数据源是一份**可增删改的配置列表**（`json` / `rss` / `gamebanana` / `github`）。三级降级链路：
+
+```
+真实联网  →  本地检索缓存（TTL）  →  内置离线兜底目录
+   ↓              ↓                      ↓
+  单源失败只降级为该源 0 条 + 状态提示，不影响其他源
+```
+
+### 2.4 离线优先
+
+- 游戏图标优先取 **Steam 本地封面缓存**，其次 exe 内嵌图标，最后才走 CDN。
+- 资源目录无网时走 `offlineCatalog.ts` 内置数据。
+- 存档路径探测只读本机目录，不依赖任何在线库。
+
+### 2.5 不做事清单（立项排除，等于设计约束）
+
+不实现反作弊规避、DRM 绕过、破解分发、联网游戏辅助、账号体系规避。客户端**不内置任何修改器本体**，只做资源目录、下载与本地管理。文件写入仅限用户显式配置的路径与工具自身数据目录，不扫描无关目录。
+
+---
+
+## 三、技术框架
+
+### 3.1 技术栈
+
+| 层 | 技术 | 版本 | 用途 |
+| --- | --- | --- | --- |
+| Runtime | Electron | 44.4.5 | 桌面容器，主进程 / 渲染进程分离 |
+| UI | Vue 3 | 3.x | 渲染层框架（Composition API + `<script setup>`） |
+| 组件库 | Element Plus | 3.x | 表格、弹窗、表单、消息提示 |
+| 状态 | Pinia | 3.x | 提供依赖注入上下文；业务共享状态集中在 `src/state.ts` 的 `reactive` 单例 |
+| 语言 | TypeScript | 5.9.3 | 主进程与渲染进程全量类型化 |
+| 渲染构建 | Vite | 5.x | 渲染进程打包（`dist/`） |
+| 主进程构建 | tsc | 5.9.3 | `tsconfig.electron.json` 编译到 `dist-electron/`（ESM） |
+| 预加载构建 | esbuild | 0.28.2 | `preload.ts` → **CJS**（`preload.cjs`） |
+| 分发打包 | electron-builder | 24.x | Windows portable 目标 |
+| 解压工具 | 7za.exe | 随包 | 子进程调用，解压 zip / 7z 与生成导出归档 |
+
+### 3.2 构建链路（关键约束）
+
+预加载脚本**必须产出 CJS**，否则 `sandbox: true` 下无法加载。因此 `build` 与 `dev` 都会先跑一次 esbuild：
+
+```bash
+esbuild electron/preload.ts --bundle --platform=node --format=cjs \
+  --outfile=dist-electron/preload.cjs --external:electron
+```
+
+完整构建顺序：
+
+```
+build:preload (esbuild → preload.cjs)
+      ↓
+vite build                → dist/index.html + dist/assets/*
+      ↓
+tsc -p tsconfig.electron.json → dist-electron/*.js
+      ↓
+electron-builder --win portable → release/*.exe
+```
+
+`package.json` 中 `build.electronDist = node_modules/electron/dist`，复用已安装并验证过的本地 Electron 运行时；`build.win.signAndEditExecutable = false` 关闭代码签名（离线环境无 winCodeSign 缓存，开启会导致打包卡在下载）。
+
+### 3.3 主进程模块地图
+
+| 文件 | 职责 |
+| --- | --- |
+| `electron/main.ts` | 设定 `userData` 数据目录、创建窗口、挂载 preload、启动 IPC |
+| `electron/ipc.ts` | 全部 IPC 通道注册与参数校验（`handle()` 统一信封） |
+| `electron/preload.ts` | `contextBridge` 暴露 `window.api`，产出 `preload.cjs` |
+| `electron/store.ts` | JSON 持久化与目录布局、配置归一与预置源播种 |
+| `electron/types.ts` | 主进程领域类型（渲染层 `src/types.ts` 为镜像定义） |
+| `electron/util.ts` | 占位符展开、越界路径防护、目录复制、体积统计、uid |
+| `electron/log.ts` | 操作记录，并推送到渲染进程 |
+| `electron/exec.ts` | 子进程调用封装 |
+| `electron/archive.ts` | 解压工具探测、条目安全校验、解压与打包 |
+| `electron/games.ts` | Steam 库扫描（注册表 + `libraryfolders.vdf` + `appmanifest_*.acf`）、启动游戏 |
+| `electron/gameArt.ts` | 游戏图标生成与缓存、主程序（main exe）识别启发式 |
+| `electron/steamLocate.ts` | Steam 安装根目录与 `steam.exe` 定位（含缓存） |
+| `electron/steamStore.ts` | Steam 商城搜索、封面下载、本地封面缓存路径解析 |
+| `electron/saves.ts` | 备份 / 恢复 / 轮换 / 固定 / 导出 / 导入 |
+| `electron/savePathFinder.ts` | 存档路径一键探测 + 启动前后快照差分 |
+| `electron/mods.ts` | 导入 / 安装计划 / 安装 / 卸载 / 冲突 / 配置档案 |
+| `electron/catalog.ts` | 在线目录拉取与缓存、下载队列、本地导入、更新检查 |
+| `electron/onlineSearch.ts` | 多源聚合检索（解析、去重合并、打分、缓存降级） |
+| `electron/presetSources.ts` | 内置预置数据源（GameBanana / GitHub） |
+| `electron/offlineCatalog.ts` | 内置离线兜底目录 |
+
+### 3.4 渲染层结构
+
+```
+src/
+├─ main.ts              应用入口
+├─ App.vue              侧边导航 + 顶栏 + 7 个视图切换 + 设置页
+├─ state.ts             全局响应式状态与刷新动作（bootstrap / runSearch / refresh*）
+├─ api.ts               window.api 的类型化包装 + call() 统一解包
+├─ types.ts             渲染层类型（与 electron/types.ts 保持镜像）
+├─ utils/modPath.ts     路径工具（改编自 mayflyMods，MIT）
+├─ style.css            全局样式
+└─ components/
+   ├─ GameLibrary.vue       游戏库：扫描 / 添加 / 图标 / Steam 匹配 / 存档路径定位
+   ├─ SaveManager.vue       存档管理：备份 / 恢复 / 固定 / 导出导入 / 快照差分
+   ├─ ModManager.vue        MOD 管理：导入 / 计划 / 安装卸载 / 冲突 / 档案
+   ├─ ResourceCenter.vue    资源中心：检索 / 筛选 / 下载队列
+   └─ SearchSourceCard.vue  数据源编辑卡片（设置页复用）
+```
+
+---
+
+## 四、仓库结构
+
+```
+PC游戏资源服务工具/
+├─ README.md                    ← 本文档
+├─ .gitignore
+├─ 客户端源码/                   Electron + Vue 3 + TypeScript 工程
+│  ├─ electron/                 主进程与预加载
+│  ├─ src/                      渲染进程
+│  ├─ resources/tools/          随包解压工具（二进制不入库，见 §7.3）
+│  ├─ scripts/verify-deps.cjs   依赖完整性自检（还原被误改名的包文件）
+│  ├─ package.json / package-lock.json
+│  ├─ tsconfig.json / tsconfig.electron.json / vite.config.ts
+│  └─ THIRD_PARTY_NOTICES.md    第三方声明（唯一维护文件）
+├─ 正式文件/                    交付说明文档
+│  ├─ 0.2.0 打包阻塞诊断与恢复步骤.md
+│  ├─ PC游戏资源服务工具 0.2.0 功能说明与接口契约.md
+│  ├─ PC游戏资源服务工具 0.4.0 在线检索接入说明.md
+│  ├─ PC游戏资源服务工具 0.5.0 开源数据源接入说明.md
+│  └─ PC游戏资源服务工具 0.6.0 游戏库修复与图标说明.md
+└─ 测试/                        预留测试目录
+```
+
+> 便携版 `*.exe`、`node_modules`、构建产物、本机临时区与日志、以及含委托方信息的立项文档均已加入 `.gitignore`，不入库。
+
+---
+
+## 五、功能模块
+
+### 5.1 概览 Overview
+
+统计卡片 + 最近操作，展示游戏数、备份数、已部署 MOD 数、资源库条数，并提供当前游戏快捷切换。
+
+### 5.2 游戏库 Game Library
+
+| 子能力 | 实现要点 |
+| --- | --- |
+| Steam 库扫描 | 注册表解析 Steam 根目录 → 解析 `libraryfolders.vdf` 得到所有库 → 遍历 `appmanifest_*.acf` |
+| 手动添加 | `ElMessageBox.prompt` 输入名称（Electron 渲染进程**不实现 `window.prompt`**），名称支持三级回退 |
+| 游戏图标 | 本地 Steam 封面 → exe 图标 → Steam CDN，统一裁剪为 160×160 PNG 缓存 |
+| 匹配 Steam 资料页 | `store.steampowered.com/api/storesearch`（公开接口），回写 appid / 商店地址 / 封面 |
+| 启动游戏 | 三级兜底：`steam.exe -applaunch` → 直接启动主程序 exe → `steam://` 协议 |
+| 合并策略 | 重复扫描时保留用户配置的别名与存档路径，只刷新安装目录与库位置 |
+
+### 5.3 存档管理 Save Manager
+
+- **备份**：按配置的存档路径逐条展开占位符后复制到 `data/p{i}`，记录文件数与体积。
+- **恢复**：恢复前**强制自动备份**，返回自动备份编号。
+- **轮换**：只清理超出 `backupKeep` 的**非固定**备份，固定（pinned）备份永不清理。
+- **导出 / 导入**：zip 归档，可在不同机器之间搬运。
+- **存档路径自动定位**：一键探测 + 快照差分双路，弹窗候选列表附带文件统计（详见 §6.3）。
+
+### 5.4 MOD 管理 Mod Manager
+
+- **导入**：支持文件夹、单文件、`zip` / `7z` / `rar`（rar 需完整版 7-Zip）。
+- **安装计划**：安装前列出 `{ source, target, overwrite }` 明细与覆盖数量。
+- **安装 / 卸载**：复制式部署（非软链接），保留还原点，中途失败回滚；卸载按部署记录逐个删除并清理空目录。
+- **冲突检测**：同一游戏下多个**已部署** MOD 写入同一目标路径即判定为冲突。
+- **配置档案（Profile）**：保存一组 MOD 的启用集合与顺序，一键套用。
+
+### 5.5 资源中心 Resource Center
+
+- 多源聚合检索（关键词 + 游戏 / 类型 / 来源 / 状态 / 风险 / 标签 / 仅已入库游戏 + 排序 + 分页）。
+- 顶部展示结果来源（实时联网 / 本地缓存 / 离线兜底）、耗时、正常源数量；失败源逐条告警。
+- 下载队列（进度推送）、本地导入、版本更新检查；检索结果可直接投递下载队列。
+
+### 5.6 操作记录 / 设置
+
+- 操作记录：全部写操作落盘（最多 500 条），失败项标红，支持清空。
+- 设置：备份保留份数、解压工具路径、单源目录地址、自动刷新开关、检索缓存 TTL、单源超时、数据源列表编辑与连通性测试。
+
+---
+
+## 六、技术方案细节
+
+### 6.1 IPC 契约与预加载桥
+
+主进程用统一信封返回，渲染层的 `call()` 负责解包并在失败时抛错：
+
+```ts
+type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+```
+
+通道按域前缀分组（节选）：
+
+| 前缀 | 通道 |
+| --- | --- |
+| `app:` | `info` / `openPath` / `openDataDir` / `openExternal` / `revealFile` |
+| `config:` | `get` / `update` |
+| `dialog:` | `pickDirectory` / `pickFiles` |
+| `games:` | `list` / `scanSteam` / `add` / `update` / `remove` / `launch` / `openDir` / `icons` / `refreshIcon` / `steamSearch` / `applySteamMatch` |
+| `saves:` | `list` / `backup` / `restore` / `remove` / `pin` / `inspect` / `export` / `import` / `probePaths` / `snapshotTake` / `snapshotDiff` |
+| `mods:` | `list` / `import` / `plan` / `install` / `uninstall` / `setEnabled` / `remove` / `update` / `conflicts` / `profiles:*` |
+| `catalog:` | `load` / `download` / `downloads` / `removeDownload` / `localImport` / `checkUpdates` |
+| `search:` | `query` / `sources` / `testSource` / `clearCache` / `cacheMeta` / `enqueueDownload` |
+| `library:` / `logs:` | `list` / `add` / `remove`，`list` / `clear` |
+
+两个**主进程 → 渲染进程**的推送事件：`log:append`（操作记录）、`download:progress`（下载进度）。
+
+`app:openExternal` 仅放行 `http` / `https`。
+
+### 6.2 数据目录布局
+
+根目录 `%APPDATA%\PCGameResourceHub\data`（显式 `app.setPath('userData', ...)`，避免中文 `productName` 造成编码问题）：
+
+```
+data/
+├─ config.json                     设置
+├─ games.json                      游戏库
+├─ library.json                    我的资源
+├─ logs.json                       操作记录（≤500 条）
+├─ backups/
+│  ├─ index.json                   备份索引
+│  └─ <游戏 id>/<备份 id>/
+│     ├─ manifest.json             原始存档路径、名称、备注、时间
+│     └─ data/p0、data/p1…         与存档路径一一对应的内容
+├─ mods/
+│  ├─ index.json                   MOD 元数据 + 部署记录
+│  ├─ profiles.json                配置档案
+│  ├─ files/<MOD id>/              导入的 MOD 源文件
+│  └─ restore/<MOD id>/<时间戳>/   安装覆盖前的还原点
+├─ catalog/
+│  ├─ cache.json                   在线目录缓存
+│  └─ search-cache.json            聚合检索缓存
+├─ icons/<gameId>.png              游戏图标缓存（160×160 PNG）
+├─ saves/snapshots.json            存档快照基线
+├─ downloads/
+│  ├─ index.json                   下载队列
+│  └─ <资源名>/<文件名>            下载落盘文件
+├─ exports/                        备份导出归档（zip）
+└─ staging/                        导入解压临时区（用完即删）
+```
+
+### 6.3 存档路径自动定位（`savePathFinder.ts`）
+
+**两路并存**，弹窗候选列表统一打分排序：
+
+1. **一键探测**：15 条热门游戏内置规则表（星露谷 / 巫师 3 / 艾尔登法环 / 博德之门 3 / 赛博朋克 2077 / 上古卷轴 5 / 辐射 4 / 空洞骑士 / 泰拉瑞亚 / 饥荒 / 黑魂 / 怪猎 / 生化危机 / 仁王 / 尼尔），加目录名关键字扫描。
+   - 扫描根：`%APPDATA%`、`%LOCALAPPDATA%`、`Documents\My Games`、`Saved Games`、`Documents`、`AppData\LocalLow`、游戏安装目录。
+   - 上限保护：`MAX_DEPTH = 4`、`MAX_COUNT_FILES = 2000`，避免大目录卡死。
+
+2. **快照差分**：先建立基线快照（记录目录内文件数 / 体积 / 最近 mtime），启动游戏并保存进度后对比，命中的目录直接作为**高置信候选**（`snapshot` 来源）。
+
+**防误报三道闸**（首轮实测曾命中 `DingTalk\...\de`、`npm-cache\_cacache\index-v5\de` 这类噪音目录）：
+
+| 闸门 | 规则 |
+| --- | --- |
+| 目录名长度门槛 | `MIN_MATCH_DIR_LEN = 5` |
+| 噪音片段过滤 | `NOISE_FRAGMENTS`：cache / logs / tmp / backup / staging … |
+| 词元长度 | ≥ 4，避免 `Stardew Valley` 拆出 `de` 这类碎片反向误匹配 |
+
+修复后误报从 4 条降到 **0 条**。
+
+### 6.4 游戏图标与主程序识别（`gameArt.ts`）
+
+图标来源优先级（**离线优先**）：
+
+```
+① Steam 本地封面缓存  appcache/librarycache/<appid>/library_600x900[_schinese].jpg
+② exe 内嵌图标        app.getFileIcon → 48×48
+③ Steam CDN           cdn.cloudflare.steamstatic.com/steam/apps/<appid>/library_600x900.jpg
+```
+
+取到后居中裁剪为正方形并缩放到 160×160 PNG，缓存到 `data/icons/<gameId>.png`。
+
+主程序识别 `resolveMainExe()` 扫描 2 层深度后按权重打分：
+
+| 项 | 权重 |
+| --- | --- |
+| 文件名等于目录名 / 目标名 | **+6000** |
+| 文件名包含目标名 | +2000 |
+| 与目录名共享前缀 ≥ 5 字符 | +2500 |
+| 体积（MB，上限 300） | +体积 |
+| 目录深度 | −1500 / 层 |
+
+并用 `NOISE_EXE_PREFIX` / `NOISE_EXE_ANY`（unins / setup / vcredist / crashhandler / reporter / createdump / diagnostic / uninstall…）与 `SKIP_DIR`（redist / thirdparty…）排除安装器与运行时。
+
+> 纯启发式「取最大 exe」会误选 `UnityCrashHandler64.exe`（1.6 MB > 真实主程序 0.9 MB）或更深的 `wallpaperui.exe`（12.7 MB）。加入噪音黑名单与共享前缀加权后，在 4 个真实游戏目录上复验全部命中。
+
+### 6.5 在线聚合检索（`onlineSearch.ts`）
+
+**数据源契约**（4 种 kind）：
+
+| kind | 响应形态 | 说明 |
+| --- | --- | --- |
+| `json` | `{ version?, updatedAt?, resources: [...] }` 或裸数组 | 自建接口，字段宽松缺省；缺 `id`/`title` 的条目丢弃 |
+| `rss` | RSS 2.0 或 Atom | 条目映射为「待核实」资源，不含下载地址 |
+| `gamebanana` | `{ _aMetadata, _aRecords: [...] }` | GameBanana apiv11，免鉴权；过滤 19 个非资源分区（Article / Blog / Thread / Question / Review / Tutorial / Wip / Concept…） |
+| `github` | 仓库搜索 `{ total_count, items }` 或 Release 数组 | 仓库形态无直链；Release 形态取首个资产直链 |
+
+`url` 支持 `{keyword}` 占位符（检索时 URL 编码替换），含占位符的源在关键词为空时**跳过**且其**结果不写入聚合缓存**（结果随关键词变化）。
+
+**并发与隔离**：`Promise.allSettled` + 每源独立 `AbortController` 超时，单源失败 / 超时被完全隔离，只降级为该源 0 条 + 状态提示。
+
+**跨源去重合并**：识别键取 `id`，无 `id` 时用「标题 + 游戏名」归一化文本。命中多源时标 `multiSource` 并累积 `sourceNames`；高优先级（数字小）源**只补齐**低优先级条目为空的字段，**不覆盖**已有非空值。
+
+**相关性打分**：标题完全相等 120 / 前缀 80 / 包含 60，游戏名 40，别名 32，标签 20，来源 12，描述 10，可用 +6，低风险 +3，有下载地址 +4。
+
+**「kind 误标」容错**：`sniffPayload()` 即使 kind 标成 `json`，也能识别 `_aRecords`（GameBanana）或 `total_count + items[].full_name`（GitHub）并改用对应适配器；命中 GameBanana 分区汇总时给出准确报错（`请在地址里补 _sModelName=Mod`），而不是笼统的「契约不符」。
+
+**内置预置源**（`presetSources.ts`）：GameBanana apiv11 与 GitHub REST API，均免鉴权、实测可用。播种策略为「**仅在保存列表为空时注入**」，用户删除后不会在下次启动被加回。
+
+> 候选源实测结论：PCGamingWiki Cargo API `403`（Cloudflare）、Nexus Mods API `401`（需 OAuth）、ModDB RSS `403`、Thunderstore 单次响应 **332 MB** —— 均未采用。
+
+### 6.6 解压安全（`archive.ts`）
+
+解压前**先列出条目**，拒绝含绝对路径或 `..` 的越界条目，再执行解压；`staging/` 作为中间区，用完即删。解压工具探测顺序：用户配置路径 → 随包 `resources/tools/7za.exe`。
+
+### 6.7 MOD 安装的还原点与回滚（`mods.ts`）
+
+1. 计算安装计划 → 展示覆盖数量。
+2. 对每个将被覆盖的现存目标文件，先复制到 `mods/restore/<MOD id>/<时间戳>/`。
+3. 执行复制；任一步失败 → 回滚本批已复制文件。
+4. 写入部署记录（`DeployRecord{ source, target, created }`），卸载时据此逆操作并清理空目录。
+
+### 6.8 本机构建环境的已知坑位
+
+以下为离线 / 受限环境下的实际踩坑记录，复现构建前建议先过一遍：
+
+| 现象 | 处理 |
+| --- | --- |
+| `pnpm` 失败（本机无法创建目录符号链接） | 改用 `npm install` + 扁平 `node_modules` |
+| `npm install` 后 4 个包文件被改名为 `*.DELETE.<hash>` | 跑 `npm run verify:deps` 按原名还原 |
+| 打包卡在下载 `winCodeSign` | 关闭代码签名（`signAndEditExecutable: false`） |
+| 清理 `dist` / `release` 时被安全删除层拦截 | 用 Python `shutil.rmtree` 或 PowerShell `Remove-Item -LiteralPath` |
+| `ELECTRON_RUN_AS_NODE=1` 使 Electron 退化为纯 Node | 跑真实 Electron 探针前先清除该变量 |
+
+---
+
+## 七、获取与构建
+
+### 7.1 环境要求
+
+- Node.js 22.x、npm 10.x
+- Windows 10 / 11 x64
+
+### 7.2 构建步骤
+
+```bash
+cd 客户端源码
+
+# 1) 安装依赖（首次约 2 分钟）
+npm install --registry=https://registry.npmmirror.com
+npm run verify:deps        # 校验依赖完整性
+
+# 2) 开发模式（Vite 热更新 + 主进程 + preload CJS）
+npm run dev
+
+# 3) 类型检查
+npm run typecheck          # vue-tsc --noEmit + tsc -p tsconfig.electron.json --noEmit
+
+# 4) 仅构建产物
+npm run build
+
+# 5) 打 Windows 便携版（输出到 客户端源码/release）
+npm run package:win
+```
+
+### 7.3 两个需要自行补齐的项
+
+| 项 | 原因 | 补齐方式 |
+| --- | --- | --- |
+| `resources/tools/7za.exe` | 第三方二进制，授权范围待最终确认，故未入库 | 从 <https://www.7-zip.org/> 获取 `7za.exe` 放入 `客户端源码/resources/tools/`；或打包后在客户端「设置 → 解压工具路径」指向本机已装的 `7z.exe` |
+| Electron 运行时 | `build.electronDist` 指向本地已安装目录 | 正常 `npm install` 会下载；离线环境请预置 `node_modules/electron/dist` |
+| `winCodeSign` 缓存 | 当前离线环境无该缓存，开启签名会卡在下载 | 已默认关闭代码签名，无需处理 |
+
+---
+
+## 八、验证记录
+
+| 版本 | 主题 | 关键验证 |
+| --- | --- | --- |
+| 0.1.0 | 静态原型 | 9 个页面交互演示（不落盘） |
+| 0.2.0 | 真实功能版 | IPC 桥打通，状态真实落盘；`vue-tsc` / `tsc` 退出码 0；便携版产出 |
+| 0.3.0 | 存档路径自动定位 | 端到端 3 项全通过；误报修复至 0 条 |
+| 0.4.0 | 在线聚合检索 | **48/48 断言通过**（含单源失败隔离、超时隔离 1519 ms、缓存命中不发请求、离线降级） |
+| 0.5.0 | 开源数据源接入 | **62/62 通过**；真实联网冒烟 2/2 源可用（GameBanana 11 条 / GitHub 30 条） |
+| 0.6.0 | 游戏库修复与图标 | **46/46 通过**；Steam 联网冒烟 3/3 PASS；4 个真实游戏目录主程序识别全中 |
+
+每轮均执行 `vue-tsc --noEmit` 与 `tsc -p tsconfig.electron.json --noEmit`，并以「受控启动 + 数据目录落盘」判定运行期可用性。
+
+---
+
+## 九、合规边界与第三方声明
+
+### 9.1 本项目边界
+
+- 仅面向单机、本地文件与可追溯资源场景。
+- **不提供**联网游戏辅助、反作弊规避、DRM 绕过、账号体系规避与破解分发。
+- 客户端不内置任何修改器本体，只做资源目录、下载与本地管理。
+- 文件写入仅限用户显式配置的路径与工具自身数据目录，**不扫描无关目录**。
+- 破坏性操作（恢复存档、安装 / 卸载 MOD）均保留还原点或部署记录。
+
+### 9.2 第三方组件
+
+| 组件 | 许可证 | 使用方式 |
+| --- | --- | --- |
+| [mayflyMods](https://github.com/aojiangfuyou1/mayflyMods) | MIT | 改编路径工具函数至 `客户端源码/src/utils/modPath.ts` |
+| [Game-Save-Manager](https://github.com/dyang886/Game-Save-Manager) | GPL-3.0 | **仅参考产品流程**，未复制或链接其源码 |
+| [Game-Cheats-Manager](https://github.com/dyang886/Game-Cheats-Manager) | — | 仅作资源目录与状态展示的产品参考，未复制源码；其「反作弊绕过提示」「Defender 白名单」属立项排除范围 |
+| [7-Zip](https://www.7-zip.org/) | LGPL-2.1+ / unRAR restriction | 以独立可执行文件随包分发，通过子进程调用，未静态链接 |
+
+完整声明见 [`客户端源码/THIRD_PARTY_NOTICES.md`](客户端源码/THIRD_PARTY_NOTICES.md)。
+
+### 9.3 License
+
+本仓库尚未附加开源许可证。在补充 `LICENSE` 之前，默认保留所有权利（All rights reserved）；对外分发第三方二进制（如 `7za.exe`）前，请先复核其授权范围。
+
+---
+
+## Ten-minute Guide (English)
+
+**PC Game Resource Hub** is a local-first Windows desktop tool for single-player PC gamers. It unifies game library management, save backup/restore, MOD import/enable/disable, and resource search & download — with a rollback guarantee on every destructive operation.
+
+**Architecture.** Electron main process (`客户端源码/electron`) owns the file system, archive subprocesses, Steam scanning, HTTP download/search and JSON persistence. The renderer (Vue 3 + Element Plus + Pinia, `客户端源码/src`) is sandboxed — `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true` — and reaches system capabilities only through `window.api`, exposed by `preload.cjs` via `contextBridge`. Every IPC call returns `{ ok: true, data } | { ok: false, error }`.
+
+**Pluggable data sources.** Online search is not bound to any single backend. Sources are a configuration list of four kinds — `json`, `rss`, `gamebanana`, `github` — fetched concurrently with per-source timeouts and full error isolation. A three-level degradation chain (live network → local TTL cache → bundled offline catalog) guarantees the UI is never empty.
+
+**Offline-first.** Game icons prefer the local Steam library cache, then the embedded exe icon, and only then the Steam CDN. Save-path detection scans local directories only.
+
+**Scope.** No anti-cheat circumvention, no DRM bypass, no crack distribution, no online-game assistance, no account bypass. The client ships no trainer binaries.
+
+**Build.**
+
+```bash
+cd 客户端源码
+npm install --registry=https://registry.npmmirror.com
+npm run typecheck
+npm run build
+npm run package:win
+```
+
+A portable `*.exe` is emitted to `客户端源码/release`. `resources/tools/7za.exe` is intentionally not committed — see §7.3.
+
+---
+
+*文档版本：0.6.0 · 最近更新：2026-10-08*
