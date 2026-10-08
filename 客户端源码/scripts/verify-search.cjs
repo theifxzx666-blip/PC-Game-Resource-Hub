@@ -136,7 +136,7 @@ async function main() {
   // -------------------------------------------------------------------------
   // 3. 英文名 / 俗称：经别名表展开后能命中
   // -------------------------------------------------------------------------
-  await   await check('别名展开：英文名 / 俗称 → 中文正式名', () => {
+  await check('别名展开：英文名 / 俗称 → 中文正式名', () => {
     const cases = [
       // 英文名（schema 2 从 save-paths / trainers 双语标题扩充而来）
       ['Stardew Valley', '星露谷物语'],
@@ -234,6 +234,42 @@ async function main() {
         `「${name}」知识库只命中 ${status.count} 条，期望 >= ${minExpected}（疑似被截断）`,
       );
       report.push(`${name}:${status.count}`);
+    }
+    return report.join('、');
+  });
+
+  // -------------------------------------------------------------------------
+  // 8. 只选类型、不输关键词
+  //
+  //    ★ 这是 v0.7.1 上线后用户报的真实缺陷。
+  //
+  //    trainers.json 是按 kind **连续存放**的：前 7825 条全是 MOD，
+  //    修改器从下标 7825 才开始。原实现在无关键词时取「文件前 400 条」，
+  //    再交给 matches() 按 kind 过滤 —— 那 400 条里零个修改器，
+  //    于是「选中修改器 + 空关键词」实测返回 0 条，看着就像知识库没接上。
+  //
+  //    修复要点：类型筛选必须发生在截断之前（先按 kind 收窄，再套上限）。
+  //    断言用 trainersInfo().byKind 的实际条数比对，而不是写死的魔数 ——
+  //    数据集重新生成后条数会变，写死阈值只会变成维护负担。
+  // -------------------------------------------------------------------------
+  await check('只选类型不输关键词：能拿到该类型全部条目', async () => {
+    const info = trainersInfo();
+    const byKind = info.byKind || {};
+    const report = [];
+    for (const kind of ['修改器', 'MOD']) {
+      const expected = byKind[kind] || 0;
+      if (expected === 0) continue; // 该类型本来就没数据（如「存档」「补丁」）
+      const result = await searchOnline({ kind, page: 1, pageSize: 12 }, { force: true });
+      assert(
+        result.total >= expected,
+        `选中「${kind}」+空关键词返回 ${result.total} 条，但知识库里该类型有 ${expected} 条（被过滤或截断了）`,
+      );
+      const kinds = new Set(result.items.map((item) => item.kind));
+      assert(
+        kinds.size === 1 && kinds.has(kind),
+        `选中「${kind}」但首屏混入了其他类型：${[...kinds].join('/')}`,
+      );
+      report.push(`${kind}:${result.total}/${expected}`);
     }
     return report.join('、');
   });

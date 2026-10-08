@@ -652,15 +652,73 @@ const SCAN_LIMIT = 1500
  */
 const LIBRARY_LIMIT = 1200
 
-function libraryAsOnline(keyword: string, limit = LIBRARY_LIMIT): OnlineResource[] {
+/** 无关键词、无类型筛选时「刚进页面」铺出来的条数。 */
+const NO_KEYWORD_SAMPLE = 400
+
+/**
+ * 无关键词时的跨类型取样。
+ *
+ * ★ 不能直接 `allTrainers().slice(0, N)`。
+ *
+ * 数据集是**按 kind 连续存放**的：前 7825 条全是 MOD，修改器从下标 7825 才开始。
+ * 取「文件前 N 条」拿到的全是 MOD，再按 kind 过滤就是 0 条 ——
+ * 实测「不带关键词 + 选中修改器」原返回 0 条，看起来就像知识库根本没接上。
+ *
+ * 这里按类型轮转取值，保证每种类型都能出现在首屏列表里。
+ */
+function sampleAcrossKinds(records: TrainerRecord[], limit: number): TrainerRecord[] {
+  const buckets = new Map<string, TrainerRecord[]>()
+  for (const record of records) {
+    const list = buckets.get(record.kind)
+    if (list) list.push(record)
+    else buckets.set(record.kind, [record])
+  }
+  const lists = [...buckets.values()]
+  const cursors = lists.map(() => 0)
+  const out: TrainerRecord[] = []
+  let progressed = true
+  while (out.length < limit && progressed) {
+    progressed = false
+    for (let i = 0; i < lists.length && out.length < limit; i += 1) {
+      const cursor = cursors[i]
+      if (cursor < lists[i].length) {
+        out.push(lists[i][cursor])
+        cursors[i] = cursor + 1
+        progressed = true
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * ★ 类型筛选必须发生在**截断之前**。
+ *
+ * 原先的写法是「先取 N 条 → 再由 matches() 按 kind 过滤」，于是上限截的是
+ * 「文件顺序靠前」的条目而不是「符合所选类型」的条目。对按 kind 排序的数据集，
+ * 这等于把后置类型（修改器）整类丢掉。现在改为先按 kind 收窄候选集，再套上限。
+ */
+function libraryAsOnline(
+  keyword: string,
+  kind?: ResourceKind | '全部',
+  limit = LIBRARY_LIMIT,
+): OnlineResource[] {
   if (!trainersAvailable()) return []
+
+  const wanted = kind && kind !== '全部' ? kind : ''
+  const keep = (record: TrainerRecord): boolean => !wanted || record.kind === wanted
 
   const kw = (keyword ?? '').trim()
   if (!kw) {
-    // 无关键词：取前 N 条，「刚进页面先给点东西看」。不查库避免铺 8943 条。
-    return allTrainers()
-      .slice(0, Math.min(limit, 400))
-      .map(toLibraryResource)
+    // 无关键词：按类型收窄后再取样。有明确类型就取该类型全部条目；
+    // 没选类型（「全部」）则跨类型轮转取样，避免整类遗漏。
+    const all = allTrainers().filter(keep)
+    // ★ 这里不套 LIBRARY_LIMIT。单类型条目总量本身有限（最大 7825），
+    //   套上限会变成「显示 1200 条、实际 7825 条」的静默截断 ——
+    //   和刚修掉的「修改器 0 条」是同一类错误的另一个面。
+    //   分页在主进程完成，只把当前页回传渲染层，不存在一次性铺满界面的问题。
+    if (wanted) return all.map(toLibraryResource)
+    return sampleAcrossKinds(all, Math.min(limit, NO_KEYWORD_SAMPLE)).map(toLibraryResource)
   }
 
   // 0) 别名展开：输入可能是俗称 / 英文名，知识库里只收中文正式名。
@@ -672,6 +730,7 @@ function libraryAsOnline(keyword: string, limit = LIBRARY_LIMIT): OnlineResource
   const seen = new Set<string>()
   for (const candidate of candidates) {
     for (const record of trainersForGame(candidate)) {
+      if (!keep(record)) continue
       if (seen.has(record.id)) continue
       seen.add(record.id)
       matched.push(record)
@@ -684,6 +743,7 @@ function libraryAsOnline(keyword: string, limit = LIBRARY_LIMIT): OnlineResource
     if (matched.length >= limit) break
     for (const record of searchTrainers(candidate, [], SCAN_LIMIT)) {
       if (matched.length >= limit) break
+      if (!keep(record)) continue
       if (seen.has(record.id)) continue
       seen.add(record.id)
       matched.push(record)
@@ -707,8 +767,8 @@ function toLibraryResource(record: TrainerRecord): OnlineResource {
  * 离线兜底：关键词优先命中知识库，无关键词给前 N 条，最后才退演示目录。
  * 目的是「界面永远不空白」。
  */
-function fallbackOffline(keyword: string): OnlineResource[] {
-  const bulk = libraryAsOnline(keyword)
+function fallbackOffline(keyword: string, kind?: ResourceKind | '全部'): OnlineResource[] {
+  const bulk = libraryAsOnline(keyword, kind)
   if (bulk.length > 0) return bulk
   return offlineAsOnline()
 }
@@ -928,7 +988,7 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
   if (enabled.length === 0) {
     // 未配置任何数据源：用旧式单目录接口 + 内置知识库兜底，保证界面可用。
     const single = await loadSingleCatalogAsOnline()
-    pool = single.items.length > 0 ? single.items : fallbackOffline(keyword)
+    pool = single.items.length > 0 ? single.items : fallbackOffline(keyword, query.kind)
     statuses = single.statuses
     live = single.items.length > 0
     // 仅在真的拿到在线目录时才记「采集时间」，否则应按离线兜底呈现。
@@ -993,9 +1053,14 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
   // 「复刻版 / MOD 安装器 / 类似星露谷的游戏」里过滤 —— 知识库里
   // 348 条真正的星露谷 MOD 反而永远检索不到（实测 0 条结果）。
   //
-  // 现在：有关键词就查库并合并（知识库条目 id 前缀 jidi-，与在线源不会撞键），
-  // 无关键词则不查库（避免首次进页面就把 8943 条全铺出来）。
-  const libItems = keyword ? libraryAsOnline(keyword) : []
+  // 现在：有关键词、**或用户选了具体类型**时都查库并合并
+  // （知识库条目 id 前缀 jidi-，与在线源不会撞键）；
+  // 只有「既无关键词又无类型筛选」时才不查库，避免首次进页面就把 8943 条全铺出来。
+  //
+  // ★ 「只选类型、不输关键词」是核心用法之一，原实现漏掉了这条路径：
+  //   实测「选中修改器 + 空关键词」返回 0 条（见 libraryAsOnline 的说明）。
+  const kindFilter = query.kind && query.kind !== '全部' ? query.kind : ''
+  const libItems = keyword || kindFilter ? libraryAsOnline(keyword, query.kind) : []
   if (libItems.length > 0) {
     pool = pool.length > 0 ? mergeOnline([pool, libItems]) : libItems
     statuses.push({
@@ -1016,7 +1081,7 @@ export async function searchOnline(query: SearchQuery, options: SearchOptions = 
   // 界面要能区分这两种，否则搜到 357 条真实资源却标「离线兜底」很误导。
   const libCount = pool.filter((item) => item.sourceIds.includes('trainer-lib')).length
 
-  if (pool.length === 0) pool = fallbackOffline(keyword)
+  if (pool.length === 0) pool = fallbackOffline(keyword, query.kind)
   const origin: SearchResult['origin'] = live
     ? 'online'
     : cachedAt
