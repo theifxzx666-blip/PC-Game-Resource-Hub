@@ -11,6 +11,8 @@ node_modules/
 客户端源码/dist/
 客户端源码/dist-electron/
 客户端源码/release/
+# 备用输出目录：绕开安全删除层时用 --config.directories.output=release-<版本>
+客户端源码/release-*/
 **/win-unpacked/
 **/*.blockmap
 **/*.nsis.7z
