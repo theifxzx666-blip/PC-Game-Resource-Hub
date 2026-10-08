@@ -5,6 +5,7 @@
 > 当前版本 **0.6.0**（Electron 44 + Vue 3 + TypeScript）
 > 形态：Windows 便携版单文件 EXE（portable），免安装、绿色运行。
 > 数据目录：`%APPDATA%\PCGameResourceHub\data`
+> 下载：[Releases](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases) · 源码与说明见下方各节
 
 ---
 
@@ -402,6 +403,14 @@ data/
 
 ## 七、获取与构建
 
+**直接下载**：便携版发布在 [Releases](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases)。
+
+| 版本 | 文件 | 大小 | MD5 |
+| --- | --- | --- | --- |
+| 0.6.0 | [`PC-Game-Resource-Hub-0.6.0-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.6.0/PC-Game-Resource-Hub-0.6.0-portable.exe) | 104,969,924 字节 | `6e24d1b2c9533aff23f264621792c9ec` |
+
+免安装，双击直接运行。附件即本地交付物 `正式文件/游戏资源服务工具演示 0.6.0.exe` 的原文件，未做重打包。**尚未进行代码签名**，Windows 首次运行可能显示未签名安全提示。
+
 ### 7.1 环境要求
 
 - Node.js 22.x、npm 10.x
@@ -429,13 +438,14 @@ npm run build
 npm run package:win
 ```
 
-### 7.3 两个需要自行补齐的项
+### 7.3 需要自行补齐的项
 
 | 项 | 原因 | 补齐方式 |
 | --- | --- | --- |
 | `resources/tools/7za.exe` | 第三方二进制，授权范围待最终确认，故未入库 | 从 <https://www.7-zip.org/> 获取 `7za.exe` 放入 `客户端源码/resources/tools/`；或打包后在客户端「设置 → 解压工具路径」指向本机已装的 `7z.exe` |
 | Electron 运行时 | `build.electronDist` 指向本地已安装目录 | 正常 `npm install` 会下载；离线环境请预置 `node_modules/electron/dist` |
 | `winCodeSign` 缓存 | 当前离线环境无该缓存，开启签名会卡在下载 | 已默认关闭代码签名，无需处理 |
+| 便携版 `*.exe` 成品 | 单文件约 105 MB，超出 GitHub 单文件 100 MB 上限，故不在代码仓库内 | 从 [Releases](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases) 下载，或本地 `npm run package:win` 自行构建 |
 
 ---
 
