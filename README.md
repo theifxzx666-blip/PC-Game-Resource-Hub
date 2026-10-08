@@ -2,7 +2,7 @@
 
 面向单机 PC 玩家的**本地优先（local-first）**游戏资源桌面工具：把「游戏库管理 / 存档备份恢复 / MOD 启停 / 资源检索下载」收敛到一个 Windows 客户端里，所有破坏性操作都可回退。
 
-> 当前版本 **0.6.0**（Electron 44 + Vue 3 + TypeScript）
+> 当前版本 **0.7.0**（Electron 44 + Vue 3 + TypeScript）
 > 形态：Windows 便携版单文件 EXE（portable），免安装、绿色运行。
 > 数据目录：`%APPDATA%\PCGameResourceHub\data`
 > 下载：[Releases](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases) · 源码与说明见下方各节
@@ -563,9 +563,10 @@ const SYMBOLS = /[™®©°′″·・:：,，.。!！?？'"“”‘’()（）
 
 | 版本 | 文件 | 大小 | MD5 |
 | --- | --- | --- | --- |
+| 0.7.0 | [`PC-Game-Resource-Hub-0.7.0-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.7.0/PC-Game-Resource-Hub-0.7.0-portable.exe) | 106,432,764 字节 | `38ffea55a7b104487dab1ce875b4e52a` |
 | 0.6.0 | [`PC-Game-Resource-Hub-0.6.0-portable.exe`](https://github.com/theifxzx666-blip/PC-Game-Resource-Hub/releases/download/v0.6.0/PC-Game-Resource-Hub-0.6.0-portable.exe) | 104,969,924 字节 | `6e24d1b2c9533aff23f264621792c9ec` |
 
-免安装，双击直接运行。附件即本地交付物 `正式文件/游戏资源服务工具演示 0.6.0.exe` 的原文件，未做重打包。**尚未进行代码签名**，Windows 首次运行可能显示未签名安全提示。
+免安装，双击直接运行。**尚未进行代码签名**，Windows 首次运行可能显示未签名安全提示。
 
 ### 7.1 环境要求
 
