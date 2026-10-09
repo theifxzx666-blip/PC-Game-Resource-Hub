@@ -275,6 +275,33 @@ async function main() {
   });
 
   // -------------------------------------------------------------------------
+  // 9. 指定未覆盖类型时不拿虚构演示条目充数
+  //
+  //    offlineCatalog 那 5 条全是虚构游戏（星陨边境 / 深港纪事 / 轨道远征），
+  //    原本服务于「界面永不空白」的演示目的。知识库里没有「存档」「补丁」数据，
+  //    此时拿 1 条虚构游戏的假存档当结果显示，比空结果更误导 ——
+  //    用户会以为检索到了，点进去才发现是演示数据。
+  //    用户 2026-10-08 决策：保留分类入口 + 如实返回空 + 界面说明覆盖范围。
+  // -------------------------------------------------------------------------
+  await check('指定未覆盖类型时不拿虚构演示条目充数', async () => {
+    const info = trainersInfo();
+    const byKind = info.byKind || {};
+    const uncovered = ['存档', '补丁'].filter((k) => !byKind[k]);
+    if (uncovered.length === 0) return '知识库已覆盖存档/补丁，本项跳过';
+    const report = [];
+    for (const kind of uncovered) {
+      const result = await searchOnline({ kind, page: 1, pageSize: 12 }, { force: true });
+      const demo = result.items.filter((item) => item.sourceIds.includes('offline'));
+      assert(
+        demo.length === 0,
+        `「${kind}」返回了 ${demo.length} 条虚构演示条目：${demo.map((i) => i.title).join('、')}`,
+      );
+      report.push(`${kind}:${result.total}`);
+    }
+    return `未覆盖类型 ${uncovered.join('/')} 命中 ${report.join('、')}（均为 0 表示如实返回空）`;
+  });
+
+  // -------------------------------------------------------------------------
   // 汇总
   // -------------------------------------------------------------------------
   console.log('');

@@ -765,11 +765,21 @@ function toLibraryResource(record: TrainerRecord): OnlineResource {
 
 /**
  * 离线兜底：关键词优先命中知识库，无关键词给前 N 条，最后才退演示目录。
- * 目的是「界面永远不空白」。
+ *
+ * ★ 但**指定了类型时不再退演示目录**。
+ *
+ * offlineCatalog 那 5 条全是虚构游戏（星陨边境 / 深港纪事 / 轨道远征），
+ * 原本是为了「界面永不空白」的演示目的。可一旦用户明确选了「存档」，
+ * 拿 1 条虚构游戏的假存档当结果显示，比空结果更误导 ——
+ * 用户会以为「检索到了」，点进去发现是演示数据。
+ *
+ * 知识库里确实没有「存档」「补丁」这两类数据，此时应当**如实返回空**，
+ * 由界面明确说明覆盖范围，而不是用演示数据把空缺填上。
  */
 function fallbackOffline(keyword: string, kind?: ResourceKind | '全部'): OnlineResource[] {
   const bulk = libraryAsOnline(keyword, kind)
   if (bulk.length > 0) return bulk
+  if (kind && kind !== '全部') return []
   return offlineAsOnline()
 }
 

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, call, formatBytes } from '../api'
-import type { UpdateItem } from '../api'
+import type { TrainerLibraryInfo, UpdateItem } from '../api'
 import { state, refreshCatalog, refreshDownloads, refreshLibrary, runSearch } from '../state'
 import type { OnlineResource, ResourceKind, ResourceRisk, ResourceStatus } from '../types'
 
@@ -36,6 +36,37 @@ const sortOptions = [
 
 const result = computed(() => state.search)
 const facets = computed(() => state.search.facets)
+
+/**
+ * 内置知识库的覆盖范围。
+ *
+ * 走主进程 `trainers:info` 拿真实统计，**不在界面里写死类型清单** ——
+ * 数据集重新生成后（比如之后真的补了「存档」数据），界面自动跟上，
+ * 不会留下一句过期的「暂不支持」。
+ */
+const libraryInfo = ref<TrainerLibraryInfo | null>(null)
+const coveredKinds = computed(() => new Set(Object.keys(libraryInfo.value?.byKind ?? {})))
+
+/**
+ * 当前所选类型不在知识库覆盖范围内时的提示文案。
+ *
+ * 「存档」「补丁」在内置知识库里本来就没有数据（来源只带来了 MOD 与修改器）。
+ * 选定这类却搜不到时必须说清是「知识库不覆盖」而不是「工具坏了」——
+ * 这两种情况下界面都是空列表，不解释的话用户无从区分。
+ */
+const kindUncovered = computed(() => {
+  const current = kind.value
+  if (current === '全部') return ''
+  if (coveredKinds.value.has(current)) return ''
+  return `内置知识库目前只覆盖 ${[...coveredKinds.value].join(' / ')}，没有「${current}」数据；该分类只能命中已配置的在线源。`
+})
+
+const emptyDescription = computed(() => {
+  if (kindUncovered.value) return kindUncovered.value
+  return keyword.value
+    ? `没有匹配「${keyword.value}」的资源，换个关键词或点「联网刷新」`
+    : '暂无资源，请先到「设置」配置在线数据源'
+})
 
 const gameOptions = computed(() => ['全部', ...facets.value.games])
 const sourceOptions = computed(() => ['全部', ...facets.value.sources])
@@ -235,7 +266,15 @@ function openDetail(resource: OnlineResource): void {
   detailVisible.value = true
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 拉一次知识库覆盖范围，用于「选中未覆盖类型」时的说明文案。
+  // 失败不影响检索本身，静默忽略即可（kindUncovered 为空，退化为原提示）。
+  void call(api.trainers.info())
+    .then((info) => {
+      libraryInfo.value = info
+    })
+    .catch(() => undefined)
+
   // 首屏已由 bootstrap 触发过一次检索；这里只在结果为空时补一次，避免重复请求。
   if (state.search.items.length === 0 && state.search.total === 0 && !state.searching) {
     search()
@@ -347,6 +386,15 @@ onMounted(() => {
           <el-segmented v-model="kind" :options="kindOptions as unknown as string[]" @change="search" />
         </div>
 
+        <el-alert
+          v-if="kindUncovered"
+          type="info"
+          :closable="false"
+          show-icon
+          class="coverage-alert"
+          :title="kindUncovered"
+        />
+
         <div v-loading="state.searching" class="resource-grid">
           <article v-for="resource in result.items" :key="resource.id" class="resource-card">
             <div class="resource-card-top">
@@ -379,7 +427,7 @@ onMounted(() => {
 
         <el-empty
           v-if="!state.searching && result.items.length === 0"
-          :description="keyword ? `没有匹配「${keyword}」的资源，换个关键词或点「联网刷新」` : '暂无资源，请先到「设置」配置在线数据源'"
+          :description="emptyDescription"
         />
 
         <div v-if="result.total > 0" class="pager">

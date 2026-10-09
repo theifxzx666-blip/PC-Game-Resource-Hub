@@ -397,6 +397,11 @@ input {
   flex-wrap: wrap;
 }
 
+/* 「选中了知识库未覆盖的资源类型」提示条 */
+.coverage-alert {
+  margin-top: 12px;
+}
+
 .stack-gap {
   margin: 0;
 }
